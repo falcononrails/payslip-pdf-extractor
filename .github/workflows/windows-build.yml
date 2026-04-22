@@ -1,0 +1,76 @@
+name: Windows Build
+
+on:
+  push:
+    branches:
+      - feature/payslip-pdf-extractor
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest
+
+      - name: Build one-file executable
+        run: >
+          pyinstaller
+          --clean
+          --onefile
+          --name payslip-extractor
+          --hidden-import tkinter
+          --hidden-import tkinter.filedialog
+          --hidden-import tkinter.messagebox
+          --collect-all pypdfium2
+          src/payslip_extractor/__main__.py
+
+      - name: Smoke test one-file executable
+        run: .\dist\payslip-extractor.exe --help
+
+      - name: Upload one-file executable
+        uses: actions/upload-artifact@v5
+        with:
+          name: payslip-extractor-onefile-windows
+          path: dist/payslip-extractor.exe
+
+      - name: Build portable folder
+        run: >
+          pyinstaller
+          --clean
+          --onedir
+          --name payslip-extractor
+          --distpath dist-folder
+          --workpath build-folder
+          --hidden-import tkinter
+          --hidden-import tkinter.filedialog
+          --hidden-import tkinter.messagebox
+          --collect-all pypdfium2
+          src/payslip_extractor/__main__.py
+
+      - name: Smoke test portable folder
+        run: .\dist-folder\payslip-extractor\payslip-extractor.exe --help
+
+      - name: Zip portable folder
+        run: Compress-Archive -Path .\dist-folder\payslip-extractor\* -DestinationPath .\payslip-extractor-folder-windows.zip
+
+      - name: Upload portable folder
+        uses: actions/upload-artifact@v5
+        with:
+          name: payslip-extractor-folder-windows
+          path: payslip-extractor-folder-windows.zip

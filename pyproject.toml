@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "payslip-pdf-extractor"
+version = "0.1.0"
+description = "Extract payslip PDF pages by employee or CNSS numbers from Excel/CSV input."
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+authors = [{ name = "Anas Limouri" }]
+dependencies = [
+    "openpyxl==3.1.5",
+    "pypdf==6.10.2",
+    "pypdfium2==5.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller==6.20.0",
+    "pytest==9.0.2",
+    "reportlab==4.4.6",
+]
+
+[project.scripts]
+payslip-extractor = "payslip_extractor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
