@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -94,6 +95,50 @@ def test_run_extraction_with_alphanumeric_identifiers(tmp_path) -> None:
     assert summary.matched_numbers_count == 2
     assert summary.matched_pages_count == 2
     assert sorted(path.name for path in summary.output_files) == ["456A.pdf", "B789.pdf"]
+
+
+def test_large_pdf_logging_and_extraction(tmp_path, caplog) -> None:
+    page_texts = []
+    for i in range(500):
+        if i == 10:
+            page_texts.append(f"Employee CNSS 123A payslip for January")
+        elif i == 250:
+            page_texts.append(f"Employee matricule B789 February bulletin")
+        elif i == 499:
+            page_texts.append(f"Employee identifier XYZ999 and also CNSS 123A")
+        else:
+            page_texts.append(f"Page {i} no relevant data here unrelated text")
+
+    pdf_file = tmp_path / "large.pdf"
+    _write_pdf(pdf_file, page_texts)
+
+    numbers_file = _write_numbers_csv(tmp_path, ["123A", "B789", "XYZ999"])
+    output_dir = tmp_path / "out"
+
+    with caplog.at_level(logging.INFO, logger="payslip_extractor"):
+        summary = run_extraction([pdf_file], numbers_file, output_dir, "separate")
+
+    assert summary.numbers_count == 3
+    assert summary.matched_numbers_count == 3
+    assert summary.matched_pages_count == 3
+
+    assert len(PdfReader(output_dir / "123A.pdf").pages) == 2
+    assert len(PdfReader(output_dir / "B789.pdf").pages) == 1
+    assert len(PdfReader(output_dir / "XYZ999.pdf").pages) == 1
+
+    log_messages = [rec.message for rec in caplog.records]
+
+    scanning_start = [m for m in log_messages if "scanning..." in m]
+    assert len(scanning_start) >= 1, f"Expected 'scanning...' log, got: {log_messages}"
+
+    page_logs = [m for m in log_messages if "page" in m and "/" in m and "match(es)" in m]
+    assert len(page_logs) >= 100, f"Expected >=100 page progress logs, got {len(page_logs)}"
+
+    done_logs = [m for m in log_messages if "done" in m]
+    assert len(done_logs) >= 1, f"Expected 'done' log, got: {log_messages}"
+
+    finished_logs = [m for m in log_messages if "Finished scanning" in m]
+    assert len(finished_logs) == 1, f"Expected exactly one 'Finished scanning' log"
 
 
 def _write_pdf(path: Path, page_texts: list[str]) -> None:
