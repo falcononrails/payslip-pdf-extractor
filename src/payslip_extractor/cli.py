@@ -11,18 +11,21 @@ from payslip_extractor.gui import UserCancelled, collect_gui_selections
 from payslip_extractor.numbers import NumberFileError
 
 
+class _FlushHandler(logging.StreamHandler):
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self.flush()
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="[%(asctime)s] %(message)s",
-        datefmt="%H:%M:%S",
-        stream=sys.stderr,
-    )
+    handler = _FlushHandler(stream=sys.stderr)
+    handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
+    logging.basicConfig(level=log_level, handlers=[handler])
 
     logger = logging.getLogger("payslip_extractor")
 

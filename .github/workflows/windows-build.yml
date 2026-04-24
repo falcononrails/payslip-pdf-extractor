@@ -37,7 +37,7 @@ jobs:
           --hidden-import tkinter
           --hidden-import tkinter.filedialog
           --hidden-import tkinter.messagebox
-          --hidden-import pymupdf
+          --collect-all pymupdf
           src/payslip_extractor/__main__.py
 
       - name: Smoke test one-file executable
@@ -60,7 +60,7 @@ jobs:
           --hidden-import tkinter
           --hidden-import tkinter.filedialog
           --hidden-import tkinter.messagebox
-          --hidden-import pymupdf
+          --collect-all pymupdf
           src/payslip_extractor/__main__.py
 
       - name: Smoke test portable folder
