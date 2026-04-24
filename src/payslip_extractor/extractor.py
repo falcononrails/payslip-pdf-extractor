@@ -143,7 +143,6 @@ def scan_pdfs(
 
         pdf_start = time.monotonic()
         found_in_pdf = False
-        last_log_time = pdf_start
 
         try:
             for page_index, text in iter_page_texts(pdf_path):
@@ -155,26 +154,23 @@ def scan_pdfs(
                 pages_scanned += 1
                 total_pages_scanned += 1
 
-                now = time.monotonic()
-                if now - last_log_time >= 1.0 or pages_scanned == total_pages:
-                    remaining_pages = total_pages_all - total_pages_scanned
-                    eta_display = ""
-                    if total_pages_scanned > 1:
-                        overall_elapsed = now - overall_start
-                        rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
-                        if rate > 0 and remaining_pages > 0:
-                            eta_secs = remaining_pages / rate
-                            eta_str = _format_eta(eta_secs)
-                            if eta_str:
-                                eta_display = f" (ETA: ~{eta_str})"
+                remaining_pages = total_pages_all - total_pages_scanned
+                eta_display = ""
+                if total_pages_scanned > 1:
+                    overall_elapsed = time.monotonic() - overall_start
+                    rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
+                    if rate > 0 and remaining_pages > 0:
+                        eta_secs = remaining_pages / rate
+                        eta_str = _format_eta(eta_secs)
+                        if eta_str:
+                            eta_display = f" (ETA: ~{eta_str})"
 
-                    log_msg = (
-                        f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
-                        f"page {pages_scanned}/{total_pages}, "
-                        f"{len(all_matches)} match(es) found{eta_display}"
-                    )
-                    logger.info(log_msg)
-                    last_log_time = now
+                log_msg = (
+                    f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
+                    f"page {pages_scanned}/{total_pages}, "
+                    f"{len(all_matches)} match(es) found{eta_display}"
+                )
+                logger.info(log_msg)
 
         except Exception as exc:
             all_audit_rows.append(

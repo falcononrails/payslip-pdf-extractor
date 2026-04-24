@@ -23,11 +23,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    handler = _FlushHandler(stream=sys.stderr)
-    handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
-    logging.basicConfig(level=log_level, handlers=[handler])
+    handlers: list[logging.Handler] = [_FlushHandler(stream=sys.stderr)]
 
-    logger = logging.getLogger("payslip_extractor")
+    console_handler = None
+    for handler in handlers:
+        if isinstance(handler, _FlushHandler):
+            console_handler = handler
 
     pdf_paths = _flatten_pdf_args(args.pdf)
     numbers_file = Path(args.numbers_file) if args.numbers_file else None
@@ -35,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = args.mode
 
     if not args.no_gui and (not pdf_paths or numbers_file is None or output_dir is None):
-        logger.info("Awaiting file selection in dialog...")
+        print("Awaiting file selection in dialog...", file=sys.stderr)
         try:
             selections = collect_gui_selections(ask_mode=not argv)
         except UserCancelled as exc:
@@ -61,6 +62,19 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         parser.error(f"missing required arguments: {', '.join(missing)}")
 
+    output_path = Path(output_dir).expanduser().resolve()
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    log_file = output_path / "extraction.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8", mode="w")
+    file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
+    handlers.append(file_handler)
+
+    logging.basicConfig(level=log_level, handlers=handlers)
+    logger = logging.getLogger("payslip_extractor")
+
+    logger.info("Log file: %s", log_file)
+
     try:
         summary = run_extraction(
             pdf_paths=pdf_paths,
@@ -79,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Identifiers matched: {summary.matched_numbers_count}")
     print(f"Pages extracted: {summary.matched_pages_count}")
     print(f"Audit report: {summary.audit_csv}")
+    print(f"Log file: {summary.audit_csv.parent / 'extraction.log'}")
     if summary.output_files:
         print("Output PDFs:")
         for output_file in summary.output_files:
@@ -86,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("No output PDFs were created because no matching pages were found.")
 
+    file_handler.close()
     return 0
 
 
