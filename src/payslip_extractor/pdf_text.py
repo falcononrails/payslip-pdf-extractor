@@ -24,6 +24,15 @@ def iter_page_texts(pdf_path: Path) -> Iterator[tuple[int, str]]:
         _close_if_possible(document)
 
 
+def get_page_count(pdf_path: Path) -> int:
+    """Return the number of pages in a PDF file."""
+    document = pdfium.PdfDocument(str(pdf_path))
+    try:
+        return len(document)
+    finally:
+        _close_if_possible(document)
+
+
 def _close_if_possible(resource: object) -> None:
     close = getattr(resource, "close", None)
     if callable(close):

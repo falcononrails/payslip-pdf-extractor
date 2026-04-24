@@ -75,6 +75,27 @@ def test_run_extraction_writes_no_match_row(tmp_path) -> None:
     assert audit_rows[0]["status"] == "no_match"
 
 
+def test_run_extraction_with_alphanumeric_identifiers(tmp_path) -> None:
+    pdf_file = tmp_path / "payroll.pdf"
+    _write_pdf(
+        pdf_file,
+        [
+            "Employee 456A payslip",
+            "Employee B789 payslip",
+            "Unrelated page 12345",
+        ],
+    )
+    numbers_file = _write_numbers_csv(tmp_path, ["456A", "B789"])
+    output_dir = tmp_path / "out"
+
+    summary = run_extraction([pdf_file], numbers_file, output_dir, "separate")
+
+    assert summary.numbers_count == 2
+    assert summary.matched_numbers_count == 2
+    assert summary.matched_pages_count == 2
+    assert sorted(path.name for path in summary.output_files) == ["456A.pdf", "B789.pdf"]
+
+
 def _write_pdf(path: Path, page_texts: list[str]) -> None:
     pdf = canvas.Canvas(str(path))
     for text in page_texts:

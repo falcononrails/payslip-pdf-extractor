@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -9,11 +10,25 @@ from payslip_extractor.extractor import ExtractionError, run_extraction
 from payslip_extractor.gui import UserCancelled, collect_gui_selections
 from payslip_extractor.numbers import NumberFileError
 
+logger = logging.getLogger("payslip_extractor")
+
+
+def _progress_handler(message: str) -> None:
+    logger.info(message)
+
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
 
     pdf_paths = _flatten_pdf_args(args.pdf)
     numbers_file = Path(args.numbers_file) if args.numbers_file else None
@@ -52,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
             numbers_file=numbers_file,
             output_dir=output_dir,
             mode=mode,
-            progress=print if args.verbose else None,
+            progress=_progress_handler,
         )
     except (ExtractionError, NumberFileError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -61,8 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Interrupted.", file=sys.stderr)
         return 130
 
-    print(f"Numbers loaded: {summary.numbers_count}")
-    print(f"Numbers matched: {summary.matched_numbers_count}")
+    print(f"Identifiers loaded: {summary.numbers_count}")
+    print(f"Identifiers matched: {summary.matched_numbers_count}")
     print(f"Pages extracted: {summary.matched_pages_count}")
     print(f"Audit report: {summary.audit_csv}")
     if summary.output_files:
@@ -78,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="payslip-extractor",
-        description="Extract searchable payslip PDF pages by numbers from Excel or CSV input.",
+        description="Extract searchable payslip PDF pages by identifiers from Excel or CSV input.",
     )
     parser.add_argument(
         "--pdf",
@@ -90,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--numbers-file",
         metavar="PATH",
-        help="Excel .xlsx/.xlsm or CSV file containing target numbers.",
+        help="Excel .xlsx/.xlsm or CSV file containing target identifiers.",
     )
     parser.add_argument(
         "--output-dir",
@@ -101,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=["separate", "merged"],
         default="separate",
-        help="Output mode: one PDF per number or one merged PDF. Default: separate.",
+        help="Output mode: one PDF per identifier or one merged PDF. Default: separate.",
     )
     parser.add_argument(
         "--no-gui",
@@ -111,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print each PDF while it is being scanned.",
+        help="Enable debug-level logging for more detailed output.",
     )
     parser.add_argument(
         "--version",

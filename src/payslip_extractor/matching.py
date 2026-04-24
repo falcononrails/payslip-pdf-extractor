@@ -3,15 +3,15 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-_DIGIT_TOKEN_RE = re.compile(r"\d+")
+_IDENTIFIER_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
 def find_matching_numbers(text: str, numbers: Sequence[str], number_set: set[str]) -> tuple[str, ...]:
-    """Return numbers present as exact digit tokens in page text."""
+    """Return identifiers present as exact tokens in page text."""
     if not text:
         return ()
 
-    page_tokens = set(_DIGIT_TOKEN_RE.findall(text))
+    page_tokens = set(_IDENTIFIER_TOKEN_RE.findall(text))
     if not page_tokens:
         return ()
 

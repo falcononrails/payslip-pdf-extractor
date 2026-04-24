@@ -14,8 +14,12 @@ class NumberFileError(ValueError):
     """Raised when the number input file cannot be read."""
 
 
+def _is_searchable_identifier(text: str) -> bool:
+    return bool(text) and any(c.isdigit() for c in text) and text.replace("_", "").isalnum()
+
+
 def read_numbers(path: Path) -> list[str]:
-    """Read unique digit-only numbers from a CSV/XLSX/XLSM file."""
+    """Read unique searchable identifiers (numbers or alphanumeric codes) from a CSV/XLSX/XLSM file."""
     path = Path(path)
     suffix = path.suffix.lower()
 
@@ -36,13 +40,13 @@ def read_numbers(path: Path) -> list[str]:
             numbers.append(candidate)
 
     if not numbers:
-        raise NumberFileError("No digit-only numbers were found in the number file.")
+        raise NumberFileError("No searchable identifiers were found in the number file.")
 
     return numbers
 
 
 def normalize_number_cell(value: object) -> str | None:
-    """Convert one spreadsheet cell value into a searchable number."""
+    """Convert one spreadsheet cell value into a searchable identifier."""
     if value is None or isinstance(value, bool):
         return None
 
@@ -53,18 +57,18 @@ def normalize_number_cell(value: object) -> str | None:
         if value.is_integer():
             return str(int(value))
         text = format(value, "f").rstrip("0").rstrip(".")
-        return text if text.isdigit() else None
+        return text if _is_searchable_identifier(text) else None
 
     if isinstance(value, Decimal):
         if value == value.to_integral_value():
             return str(value.to_integral_value())
         text = format(value.normalize(), "f").rstrip("0").rstrip(".")
-        return text if text.isdigit() else None
+        return text if _is_searchable_identifier(text) else None
 
     text = str(value).strip().removeprefix("'").strip()
     if text.endswith(".0") and text[:-2].isdigit():
         return text[:-2]
-    return text if text.isdigit() else None
+    return text if _is_searchable_identifier(text) else None
 
 
 def _iter_csv_values(path: Path) -> Iterable[object]:
