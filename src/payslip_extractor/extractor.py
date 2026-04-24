@@ -147,7 +147,6 @@ def scan_pdfs(
 
         found_in_pdf = False
         pages_scanned = 0
-        last_progress_time = pdf_start
 
         try:
             for page_index, text in iter_page_texts(pdf_path):
@@ -159,40 +158,26 @@ def scan_pdfs(
                 pages_scanned += 1
                 total_pages_scanned += 1
 
-                now = time.monotonic()
-                elapsed_since_last = now - last_progress_time
-                should_log = (
-                    total_pages > 0
-                    and pages_scanned % max(1, total_pages // 20) == 0
-                    and elapsed_since_last >= 2.0
-                ) or (
-                    total_pages > 50
-                    and pages_scanned % 50 == 0
-                    and elapsed_since_last >= 2.0
+                remaining_pages = total_pages_all - total_pages_scanned
+                eta_display = ""
+                if total_pages_scanned > 1:
+                    overall_elapsed = time.monotonic() - overall_start
+                    rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
+                    if rate > 0 and remaining_pages > 0:
+                        eta_secs = remaining_pages / rate
+                        eta_str = _format_eta(eta_secs)
+                        if eta_str:
+                            eta_display = f" (ETA: ~{eta_str})"
+
+                found_count = len(matches)
+                log_msg = (
+                    f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
+                    f"page {pages_scanned}/{total_pages}, "
+                    f"{found_count} match(es) found{eta_display}"
                 )
-
-                if should_log or pages_scanned == total_pages:
-                    eta_display = ""
-                    if total_pages_scanned > 1:
-                        overall_elapsed = now - overall_start
-                        rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
-                        remaining_pages = total_pages_all - total_pages_scanned
-                        if rate > 0 and remaining_pages > 0:
-                            eta_secs = remaining_pages / rate
-                            eta_str = _format_eta(eta_secs)
-                            if eta_str:
-                                eta_display = f" (ETA: ~{eta_str})"
-
-                    found_count = len(matches)
-                    log_msg = (
-                        f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
-                        f"page {pages_scanned}/{total_pages}, "
-                        f"{found_count} match(es) found{eta_display}"
-                    )
-                    logger.info(log_msg)
-                    if progress:
-                        progress(log_msg)
-                    last_progress_time = now
+                logger.info(log_msg)
+                if progress:
+                    progress(log_msg)
 
         except Exception as exc:
             audit_rows.append(

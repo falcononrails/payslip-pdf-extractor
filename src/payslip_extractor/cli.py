@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     mode = args.mode
 
     if not args.no_gui and (not pdf_paths or numbers_file is None or output_dir is None):
+        print("Awaiting file selection in dialog...", file=sys.stderr)
         try:
             selections = collect_gui_selections(ask_mode=not argv)
         except UserCancelled as exc:
