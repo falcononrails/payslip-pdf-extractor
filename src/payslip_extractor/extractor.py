@@ -6,7 +6,6 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
 
@@ -118,49 +117,6 @@ def _get_total_pages(pdf_path: Path) -> int:
         return 0
 
 
-def _scan_single_pdf(
-    pdf_path: Path,
-    numbers: list[str],
-    number_set: set[str],
-) -> tuple[list[PageMatch], list[AuditRow]]:
-    matches: list[PageMatch] = []
-    audit_rows: list[AuditRow] = []
-
-    found_in_pdf = False
-    try:
-        for page_index, text in iter_page_texts(pdf_path):
-            page_matches = find_matching_numbers(text, numbers, number_set)
-            if page_matches:
-                found_in_pdf = True
-                matches.append(PageMatch(pdf_path, page_index, page_matches))
-    except Exception as exc:
-        audit_rows.append(
-            AuditRow(
-                status="error",
-                source_pdf=pdf_path,
-                page_number="",
-                matched_numbers="",
-                output_pdf="",
-                message=str(exc),
-            )
-        )
-        return matches, audit_rows
-
-    if not found_in_pdf:
-        audit_rows.append(
-            AuditRow(
-                status="no_match",
-                source_pdf=pdf_path,
-                page_number="",
-                matched_numbers="",
-                output_pdf="",
-                message="No target identifier found",
-            )
-        )
-
-    return matches, audit_rows
-
-
 def scan_pdfs(
     pdf_paths: Iterable[Path],
     numbers: list[str],
@@ -178,167 +134,110 @@ def scan_pdfs(
 
     logger.info("Scanning %d PDF file(s), %d total pages...", total_pdfs, total_pages_all)
 
-    if total_pdfs == 1:
-        return _scan_single_pdf_sequential(
-            pdf_list[0], numbers, number_set, pdf_page_counts, total_pages_all, progress
-        )
-
     overall_start = time.monotonic()
+    total_pages_scanned = 0
+    pages_scanned_in_current_pdf = 0
 
-    with ThreadPoolExecutor() as executor:
-        future_to_pdf = {
-            executor.submit(_scan_single_pdf, pdf_path, numbers, number_set): pdf_path
-            for pdf_path in pdf_list
-        }
+    for pdf_index, pdf_path in enumerate(pdf_list, 1):
+        total_pages = pdf_page_counts[pdf_path]
+        pages_scanned_in_current_pdf = 0
 
-        completed = 0
-        for future in as_completed(future_to_pdf):
-            pdf_path = future_to_pdf[future]
-            completed += 1
-            try:
-                pdf_matches, pdf_audit = future.result()
-            except Exception as exc:
-                logger.error("Failed to scan %s: %s", pdf_path.name, exc)
-                all_audit_rows.append(
-                    AuditRow(
-                        status="error",
-                        source_pdf=pdf_path,
-                        page_number="",
-                        matched_numbers="",
-                        output_pdf="",
-                        message=str(exc),
+        msg = f"[{pdf_index}/{total_pdfs}] {pdf_path.name} ({total_pages} pages) - scanning..."
+        logger.info(msg)
+        if progress:
+            progress(msg)
+
+        pdf_start = time.monotonic()
+        found_in_pdf = False
+        last_log_time = pdf_start
+
+        try:
+            for page_index, text in iter_page_texts(pdf_path):
+                page_matches = find_matching_numbers(text, numbers, number_set)
+                if page_matches:
+                    found_in_pdf = True
+                    all_matches.append(PageMatch(pdf_path, page_index, page_matches))
+
+                pages_scanned_in_current_pdf += 1
+                total_pages_scanned += 1
+
+                now = time.monotonic()
+                if now - last_log_time >= 1.0 or pages_scanned_in_current_pdf == total_pages:
+                    remaining_pages = total_pages_all - total_pages_scanned
+                    eta_display = ""
+                    if total_pages_scanned > 1:
+                        overall_elapsed = now - overall_start
+                        rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
+                        if rate > 0 and remaining_pages > 0:
+                            eta_secs = remaining_pages / rate
+                            eta_str = _format_eta(eta_secs)
+                            if eta_str:
+                                eta_display = f" (ETA: ~{eta_str})"
+
+                    log_msg = (
+                        f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
+                        f"page {pages_scanned_in_current_pdf}/{total_pages}, "
+                        f"{len(all_matches)} match(es) found{eta_display}"
                     )
+                    logger.info(log_msg)
+                    if progress:
+                        progress(log_msg)
+                    last_log_time = now
+
+        except Exception as exc:
+            all_audit_rows.append(
+                AuditRow(
+                    status="error",
+                    source_pdf=pdf_path,
+                    page_number="",
+                    matched_numbers="",
+                    output_pdf="",
+                    message=str(exc),
                 )
-                continue
-
-            all_matches.extend(pdf_matches)
-            all_audit_rows.extend(pdf_audit)
-
-            pdf_pages = pdf_page_counts.get(pdf_path, 0)
-            match_count = len(pdf_matches)
-            elapsed = time.monotonic() - overall_start
-            rate = sum(pdf_page_counts[f] for f in pdf_list[:completed]) / elapsed if elapsed > 0 else 0
-            eta_display = ""
-            remaining = sum(pdf_page_counts[f] for f in pdf_list[completed:])
-            if rate > 0 and remaining > 0:
-                eta_str = _format_eta(remaining / rate)
-                if eta_str:
-                    eta_display = f" (ETA: ~{eta_str})"
-
-            pdf_match_count = match_count
-            status = f"{pdf_match_count} match(es)" if pdf_match_count else "no matches"
-            msg = f"[{completed}/{total_pdfs}] {pdf_path.name} ({pdf_pages} pages) - done, {status}{eta_display}"
-            logger.info(msg)
+            )
+            logger.error("[%d/%d] %s - error: %s", pdf_index, total_pdfs, pdf_path.name, exc)
             if progress:
-                progress(msg)
+                progress(f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - error: {exc}")
+            continue
+
+        pdf_elapsed = time.monotonic() - pdf_start
+        pdf_matches = sum(1 for m in all_matches if m.source_pdf == pdf_path)
+        if found_in_pdf:
+            logger.info(
+                "[%d/%d] %s - done, %d match(es) in %s",
+                pdf_index,
+                total_pdfs,
+                pdf_path.name,
+                pdf_matches,
+                _format_eta(pdf_elapsed) or f"{pdf_elapsed:.1f}s",
+            )
+        else:
+            logger.info(
+                "[%d/%d] %s - done, no matches (%s)",
+                pdf_index,
+                total_pdfs,
+                pdf_path.name,
+                _format_eta(pdf_elapsed) or f"{pdf_elapsed:.1f}s",
+            )
+            all_audit_rows.append(
+                AuditRow(
+                    status="no_match",
+                    source_pdf=pdf_path,
+                    page_number="",
+                    matched_numbers="",
+                    output_pdf="",
+                    message="No target identifier found",
+                )
+            )
 
     overall_elapsed = time.monotonic() - overall_start
     logger.info(
         "Finished scanning %d pages in %s.",
-        total_pages_all,
+        total_pages_scanned,
         _format_eta(overall_elapsed) or f"{overall_elapsed:.1f}s",
     )
 
-    for pdf_path in pdf_list:
-        if not any(m.source_pdf == pdf_path for m in all_matches):
-            if not any(r.source_pdf == pdf_path and r.status in ("error", "no_match") for r in all_audit_rows):
-                all_audit_rows.append(
-                    AuditRow(
-                        status="no_match",
-                        source_pdf=pdf_path,
-                        page_number="",
-                        matched_numbers="",
-                        output_pdf="",
-                        message="No target identifier found",
-                    )
-                )
-
     return all_matches, all_audit_rows
-
-
-def _scan_single_pdf_sequential(
-    pdf_path: Path,
-    numbers: list[str],
-    number_set: set[str],
-    pdf_page_counts: dict[Path, int],
-    total_pages_all: int,
-    progress: ProgressCallback | None,
-) -> tuple[list[PageMatch], list[AuditRow]]:
-    matches: list[PageMatch] = []
-    audit_rows: list[AuditRow] = []
-    total_pages = pdf_page_counts.get(pdf_path, 0)
-
-    msg = f"[1/1] {pdf_path.name} ({total_pages} pages) - scanning..."
-    logger.info(msg)
-    if progress:
-        progress(msg)
-
-    overall_start = time.monotonic()
-    pages_scanned = 0
-    last_log_time = overall_start
-
-    try:
-        for page_index, text in iter_page_texts(pdf_path):
-            page_matches = find_matching_numbers(text, numbers, number_set)
-            if page_matches:
-                matches.append(PageMatch(pdf_path, page_index, page_matches))
-
-            pages_scanned += 1
-
-            now = time.monotonic()
-            if now - last_log_time >= 1.0 or pages_scanned == total_pages:
-                elapsed = now - overall_start
-                rate = pages_scanned / elapsed if elapsed > 0 else 0
-                remaining = total_pages - pages_scanned
-                eta_display = ""
-                if rate > 0 and remaining > 0:
-                    eta_str = _format_eta(remaining / rate)
-                    if eta_str:
-                        eta_display = f" (ETA: ~{eta_str})"
-
-                log_msg = (
-                    f"[1/1] {pdf_path.name} - "
-                    f"page {pages_scanned}/{total_pages}, "
-                    f"{len(matches)} match(es) found{eta_display}"
-                )
-                logger.info(log_msg)
-                if progress:
-                    progress(log_msg)
-                last_log_time = now
-
-    except Exception as exc:
-        audit_rows.append(
-            AuditRow(
-                status="error",
-                source_pdf=pdf_path,
-                page_number="",
-                matched_numbers="",
-                output_pdf="",
-                message=str(exc),
-            )
-        )
-        logger.error("Failed to scan %s: %s", pdf_path.name, exc)
-        if progress:
-            progress(f"[1/1] {pdf_path.name} - error: {exc}")
-        return matches, audit_rows
-
-    elapsed = time.monotonic() - overall_start
-    if matches:
-        logger.info("[1/1] %s - done, %d match(es) in %s", pdf_path.name, len(matches), _format_eta(elapsed) or f"{elapsed:.1f}s")
-    else:
-        logger.info("[1/1] %s - done, no matches (%s)", pdf_path.name, _format_eta(elapsed) or f"{elapsed:.1f}s")
-        audit_rows.append(
-            AuditRow(
-                status="no_match",
-                source_pdf=pdf_path,
-                page_number="",
-                matched_numbers="",
-                output_pdf="",
-                message="No target identifier found",
-            )
-        )
-
-    return matches, audit_rows
 
 
 def write_audit_csv(path: Path, rows: Iterable[AuditRow]) -> None:
