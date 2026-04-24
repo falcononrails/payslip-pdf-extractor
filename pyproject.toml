@@ -12,7 +12,7 @@ authors = [{ name = "Anas Limouri" }]
 dependencies = [
     "openpyxl==3.1.5",
     "pypdf==6.10.2",
-    "pypdfium2==5.7.1",
+    "pymupdf==1.27.2.3",
 ]
 
 [project.optional-dependencies]

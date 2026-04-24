@@ -3,37 +3,24 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
-import pypdfium2 as pdfium
+import pymupdf
 
 
 def iter_page_texts(pdf_path: Path) -> Iterator[tuple[int, str]]:
     """Yield zero-based page indexes and extracted text for a searchable PDF."""
-    document = pdfium.PdfDocument(str(pdf_path))
+    doc = pymupdf.open(str(pdf_path))
     try:
-        for page_index in range(len(document)):
-            page = document[page_index]
-            try:
-                textpage = page.get_textpage()
-                try:
-                    yield page_index, textpage.get_text_range() or ""
-                finally:
-                    _close_if_possible(textpage)
-            finally:
-                _close_if_possible(page)
+        for page_index in range(len(doc)):
+            text = doc[page_index].get_text() or ""
+            yield page_index, text
     finally:
-        _close_if_possible(document)
+        doc.close()
 
 
 def get_page_count(pdf_path: Path) -> int:
     """Return the number of pages in a PDF file."""
-    document = pdfium.PdfDocument(str(pdf_path))
+    doc = pymupdf.open(str(pdf_path))
     try:
-        return len(document)
+        return len(doc)
     finally:
-        _close_if_possible(document)
-
-
-def _close_if_possible(resource: object) -> None:
-    close = getattr(resource, "close", None)
-    if callable(close):
-        close()
+        doc.close()

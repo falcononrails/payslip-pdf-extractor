@@ -10,12 +10,6 @@ from payslip_extractor.extractor import ExtractionError, run_extraction
 from payslip_extractor.gui import UserCancelled, collect_gui_selections
 from payslip_extractor.numbers import NumberFileError
 
-logger = logging.getLogger("payslip_extractor")
-
-
-def _progress_handler(message: str) -> None:
-    logger.info(message)
-
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -30,13 +24,15 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
 
+    logger = logging.getLogger("payslip_extractor")
+
     pdf_paths = _flatten_pdf_args(args.pdf)
     numbers_file = Path(args.numbers_file) if args.numbers_file else None
     output_dir = Path(args.output_dir) if args.output_dir else None
     mode = args.mode
 
     if not args.no_gui and (not pdf_paths or numbers_file is None or output_dir is None):
-        print("Awaiting file selection in dialog...", file=sys.stderr)
+        logger.info("Awaiting file selection in dialog...")
         try:
             selections = collect_gui_selections(ask_mode=not argv)
         except UserCancelled as exc:
@@ -68,7 +64,6 @@ def main(argv: list[str] | None = None) -> int:
             numbers_file=numbers_file,
             output_dir=output_dir,
             mode=mode,
-            progress=_progress_handler,
         )
     except (ExtractionError, NumberFileError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
