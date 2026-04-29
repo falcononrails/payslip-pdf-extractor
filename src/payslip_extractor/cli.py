@@ -25,11 +25,6 @@ def main(argv: list[str] | None = None) -> int:
     log_level = logging.DEBUG if args.verbose else logging.INFO
     handlers: list[logging.Handler] = [_FlushHandler(stream=sys.stderr)]
 
-    console_handler = None
-    for handler in handlers:
-        if isinstance(handler, _FlushHandler):
-            console_handler = handler
-
     pdf_paths = _flatten_pdf_args(args.pdf)
     numbers_file = Path(args.numbers_file) if args.numbers_file else None
     output_dir = Path(args.output_dir) if args.output_dir else None
@@ -76,33 +71,35 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Log file: %s", log_file)
 
     try:
-        summary = run_extraction(
-            pdf_paths=pdf_paths,
-            numbers_file=numbers_file,
-            output_dir=output_dir,
-            mode=mode,
-        )
-    except (ExtractionError, NumberFileError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        print("Interrupted.", file=sys.stderr)
-        return 130
+        try:
+            summary = run_extraction(
+                pdf_paths=pdf_paths,
+                numbers_file=numbers_file,
+                output_dir=output_dir,
+                mode=mode,
+            )
+        except (ExtractionError, NumberFileError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            print("Interrupted.", file=sys.stderr)
+            return 130
 
-    print(f"Identifiers loaded: {summary.numbers_count}")
-    print(f"Identifiers matched: {summary.matched_numbers_count}")
-    print(f"Pages extracted: {summary.matched_pages_count}")
-    print(f"Audit report: {summary.audit_csv}")
-    print(f"Log file: {summary.audit_csv.parent / 'extraction.log'}")
-    if summary.output_files:
-        print("Output PDFs:")
-        for output_file in summary.output_files:
-            print(f"  {output_file}")
-    else:
-        print("No output PDFs were created because no matching pages were found.")
+        print(f"Identifiers loaded: {summary.numbers_count}")
+        print(f"Identifiers matched: {summary.matched_numbers_count}")
+        print(f"Pages extracted: {summary.matched_pages_count}")
+        print(f"Audit report: {summary.audit_csv}")
+        print(f"Log file: {summary.audit_csv.parent / 'extraction.log'}")
+        if summary.output_files:
+            print("Output PDFs:")
+            for output_file in summary.output_files:
+                print(f"  {output_file}")
+        else:
+            print("No output PDFs were created because no matching pages were found.")
 
-    file_handler.close()
-    return 0
+        return 0
+    finally:
+        file_handler.close()
 
 
 def build_parser() -> argparse.ArgumentParser:

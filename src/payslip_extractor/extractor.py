@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Literal
 
-from pypdf import PdfReader, PdfWriter
+import pymupdf
 
 from payslip_extractor.matching import find_matching_numbers
 from payslip_extractor.models import AuditRow, ExtractionSummary, PageMatch
@@ -19,6 +19,7 @@ from payslip_extractor.pdf_text import get_page_count, iter_page_texts
 OutputMode = Literal["separate", "merged"]
 
 logger = logging.getLogger("payslip_extractor")
+PROGRESS_LOG_INTERVAL_PAGES = 50
 
 AUDIT_FIELDNAMES = [
     "status",
@@ -82,7 +83,7 @@ def run_extraction(
     output_files: list[Path] = []
     if matches:
         logger.info("Writing output PDFs to %s...", output_path)
-        with PdfReaderCache() as reader_cache:
+        with PdfDocumentCache() as reader_cache:
             if mode == "merged":
                 merged_pdf = output_path / "matched_pages.pdf"
                 _write_matches_pdf(merged_pdf, matches, reader_cache)
@@ -143,34 +144,37 @@ def scan_pdfs(
 
         pdf_start = time.monotonic()
         found_in_pdf = False
+        pdf_matches = 0
 
         try:
             for page_index, text in iter_page_texts(pdf_path):
                 page_matches = find_matching_numbers(text, numbers, number_set)
                 if page_matches:
                     found_in_pdf = True
+                    pdf_matches += 1
                     all_matches.append(PageMatch(pdf_path, page_index, page_matches))
 
                 pages_scanned += 1
                 total_pages_scanned += 1
 
-                remaining_pages = total_pages_all - total_pages_scanned
-                eta_display = ""
-                if total_pages_scanned > 1:
-                    overall_elapsed = time.monotonic() - overall_start
-                    rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
-                    if rate > 0 and remaining_pages > 0:
-                        eta_secs = remaining_pages / rate
-                        eta_str = _format_eta(eta_secs)
-                        if eta_str:
-                            eta_display = f" (ETA: ~{eta_str})"
+                if _should_log_page_progress(pages_scanned, total_pages, bool(page_matches)):
+                    remaining_pages = total_pages_all - total_pages_scanned
+                    eta_display = ""
+                    if total_pages_scanned > 1:
+                        overall_elapsed = time.monotonic() - overall_start
+                        rate = total_pages_scanned / overall_elapsed if overall_elapsed > 0 else 0
+                        if rate > 0 and remaining_pages > 0:
+                            eta_secs = remaining_pages / rate
+                            eta_str = _format_eta(eta_secs)
+                            if eta_str:
+                                eta_display = f" (ETA: ~{eta_str})"
 
-                log_msg = (
-                    f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
-                    f"page {pages_scanned}/{total_pages}, "
-                    f"{len(all_matches)} match(es) found{eta_display}"
-                )
-                logger.info(log_msg)
+                    log_msg = (
+                        f"[{pdf_index}/{total_pdfs}] {pdf_path.name} - "
+                        f"page {pages_scanned}/{total_pages}, "
+                        f"{len(all_matches)} matched page(s){eta_display}"
+                    )
+                    logger.info(log_msg)
 
         except Exception as exc:
             all_audit_rows.append(
@@ -187,7 +191,6 @@ def scan_pdfs(
             continue
 
         pdf_elapsed = time.monotonic() - pdf_start
-        pdf_matches = sum(1 for m in all_matches if m.source_pdf == pdf_path)
         if found_in_pdf:
             logger.info(
                 "[%d/%d] %s - done, %d match(es) in %s",
@@ -226,6 +229,15 @@ def scan_pdfs(
     return all_matches, all_audit_rows
 
 
+def _should_log_page_progress(pages_scanned: int, total_pages: int, page_has_match: bool) -> bool:
+    return (
+        page_has_match
+        or pages_scanned == 1
+        or pages_scanned == total_pages
+        or pages_scanned % PROGRESS_LOG_INTERVAL_PAGES == 0
+    )
+
+
 def write_audit_csv(path: Path, rows: Iterable[AuditRow]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=AUDIT_FIELDNAMES)
@@ -238,7 +250,7 @@ def _write_separate_outputs(
     output_dir: Path,
     numbers: list[str],
     matches: list[PageMatch],
-    reader_cache: "PdfReaderCache",
+    reader_cache: "PdfDocumentCache",
     audit_rows: list[AuditRow],
 ) -> list[Path]:
     matches_by_number: dict[str, list[PageMatch]] = defaultdict(list)
@@ -263,15 +275,16 @@ def _write_separate_outputs(
 def _write_matches_pdf(
     output_pdf: Path,
     matches: list[PageMatch],
-    reader_cache: "PdfReaderCache",
+    reader_cache: "PdfDocumentCache",
 ) -> None:
-    writer = PdfWriter()
-    for match in matches:
-        reader = reader_cache.get(match.source_pdf)
-        writer.add_page(reader.pages[match.page_index])
-
-    with output_pdf.open("wb") as output_file:
-        writer.write(output_file)
+    output_doc = pymupdf.open()
+    try:
+        for match in matches:
+            source_doc = reader_cache.get(match.source_pdf)
+            output_doc.insert_pdf(source_doc, from_page=match.page_index, to_page=match.page_index)
+        output_doc.save(str(output_pdf), garbage=3, deflate=True)
+    finally:
+        output_doc.close()
 
 
 def _matched_audit_rows(
@@ -299,28 +312,22 @@ def _safe_filename(value: str) -> str:
     return name or "number"
 
 
-class PdfReaderCache:
+class PdfDocumentCache:
     def __init__(self) -> None:
-        self._handles: dict[Path, object] = {}
-        self._readers: dict[Path, PdfReader] = {}
+        self._documents: dict[Path, pymupdf.Document] = {}
 
-    def __enter__(self) -> "PdfReaderCache":
+    def __enter__(self) -> "PdfDocumentCache":
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.close()
 
-    def get(self, path: Path) -> PdfReader:
-        if path not in self._readers:
-            handle = path.open("rb")
-            self._handles[path] = handle
-            self._readers[path] = PdfReader(handle, strict=False)
-        return self._readers[path]
+    def get(self, path: Path) -> pymupdf.Document:
+        if path not in self._documents:
+            self._documents[path] = pymupdf.open(str(path))
+        return self._documents[path]
 
     def close(self) -> None:
-        for handle in self._handles.values():
-            close = getattr(handle, "close", None)
-            if callable(close):
-                close()
-        self._handles.clear()
-        self._readers.clear()
+        for document in self._documents.values():
+            document.close()
+        self._documents.clear()

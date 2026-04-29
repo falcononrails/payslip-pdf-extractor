@@ -8,7 +8,7 @@ The Windows build is designed for locked-down computers: the user downloads the 
 
 - Reads many large searchable-text PDF files.
 - Reads target numbers from `.xlsx`, `.xlsm`, or `.csv`.
-- Finds exact digit-token matches only, so `123` does not match `91234`.
+- Finds exact identifier-token matches only, so `123` does not match `91234`.
 - Extracts only pages where a target number appears.
 - Writes either one PDF per number or one merged PDF.
 - Always writes `audit.csv` with matches, output files, and skipped/error rows.
@@ -24,8 +24,8 @@ Download one of the GitHub Actions artifacts:
 
 Double-clicking the executable opens file selection dialogs:
 
-1. Select the PDF files.
-2. Select the Excel or CSV file containing numbers.
+1. Add PDF files. Use `Ajouter des PDFs...` multiple times when files are in different folders, or `Ajouter un dossier...` for one folder.
+2. Select the Excel or CSV file containing identifiers.
 3. Select the output folder.
 4. Choose one merged PDF or one PDF per number.
 

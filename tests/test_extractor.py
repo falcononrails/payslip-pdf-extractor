@@ -131,8 +131,8 @@ def test_large_pdf_logging_and_extraction(tmp_path, caplog) -> None:
     scanning_start = [m for m in log_messages if "scanning..." in m]
     assert len(scanning_start) >= 1, f"Expected 'scanning...' log, got: {log_messages}"
 
-    page_logs = [m for m in log_messages if "page" in m and "/" in m and "match(es)" in m]
-    assert len(page_logs) >= 100, f"Expected >=100 page progress logs, got {len(page_logs)}"
+    page_logs = [m for m in log_messages if "page" in m and "/" in m and "matched page(s)" in m]
+    assert 10 <= len(page_logs) < 30, f"Expected throttled page progress logs, got {len(page_logs)}"
 
     done_logs = [m for m in log_messages if "done" in m]
     assert len(done_logs) >= 1, f"Expected 'done' log, got: {log_messages}"

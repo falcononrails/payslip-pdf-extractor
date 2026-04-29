@@ -26,6 +26,13 @@ def test_find_matching_numbers_matches_alphanumeric_identifiers() -> None:
     assert find_matching_numbers("Employee 456A and B789 here", numbers, number_set) == ("456A", "B789")
 
 
+def test_find_matching_numbers_matches_underscore_identifiers() -> None:
+    numbers = ["AB_123"]
+    number_set = set(numbers)
+
+    assert find_matching_numbers("Employee AB_123 here", numbers, number_set) == ("AB_123",)
+
+
 def test_find_matching_numbers_does_not_partial_match_alphanumeric() -> None:
     numbers = ["456"]
     number_set = set(numbers)
