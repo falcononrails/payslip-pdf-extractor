@@ -37,6 +37,7 @@ jobs:
           --hidden-import tkinter
           --hidden-import tkinter.filedialog
           --hidden-import tkinter.messagebox
+          --collect-data payslip_extractor
           --collect-all pymupdf
           src/payslip_extractor/__main__.py
 
@@ -60,6 +61,7 @@ jobs:
           --hidden-import tkinter
           --hidden-import tkinter.filedialog
           --hidden-import tkinter.messagebox
+          --collect-data payslip_extractor
           --collect-all pymupdf
           src/payslip_extractor/__main__.py
 

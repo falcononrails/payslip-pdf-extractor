@@ -9,6 +9,7 @@ from payslip_extractor import __version__
 from payslip_extractor.extractor import ExtractionError, run_extraction
 from payslip_extractor.gui import UserCancelled, collect_gui_selections
 from payslip_extractor.numbers import NumberFileError
+from payslip_extractor.web import DEFAULT_WEB_PORT, launch_web_app
 
 
 class _FlushHandler(logging.StreamHandler):
@@ -22,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.web or (not argv and not args.gui):
+        return launch_web_app(host=args.host, port=args.port, open_browser=not args.no_browser)
+
+    mode_explicit = any(arg == "--mode" or arg.startswith("--mode=") for arg in argv)
     log_level = logging.DEBUG if args.verbose else logging.INFO
     handlers: list[logging.Handler] = [_FlushHandler(stream=sys.stderr)]
 
@@ -33,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_gui and (not pdf_paths or numbers_file is None or output_dir is None):
         print("Awaiting file selection in dialog...", file=sys.stderr)
         try:
-            selections = collect_gui_selections(ask_mode=not argv)
+            selections = collect_gui_selections(ask_mode=not mode_explicit)
         except UserCancelled as exc:
             print(f"Cancelled: {exc}", file=sys.stderr)
             return 2
@@ -44,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         pdf_paths = pdf_paths or selections.pdf_paths
         numbers_file = numbers_file or selections.numbers_file
         output_dir = output_dir or selections.output_dir
-        if not argv:
+        if not mode_explicit:
             mode = selections.mode
 
     missing = []
@@ -134,6 +139,32 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-gui",
         action="store_true",
         help="Do not open file selection dialogs when arguments are missing.",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Use the older native file selection dialogs instead of the local browser UI.",
+    )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Start the local browser UI.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host for the local browser UI. Default: 127.0.0.1.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_WEB_PORT,
+        help=f"Port for the local browser UI. Default: {DEFAULT_WEB_PORT}. Use 0 to choose a free port.",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Start the local browser UI without opening a browser tab.",
     )
     parser.add_argument(
         "--verbose",

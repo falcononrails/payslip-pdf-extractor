@@ -22,12 +22,14 @@ Download one of the GitHub Actions artifacts:
 - `payslip-extractor-onefile-windows`: one `.exe`.
 - `payslip-extractor-folder-windows`: fallback portable folder if the one-file executable is blocked by antivirus policy.
 
-Double-clicking the executable opens file selection dialogs:
+Double-clicking the executable opens a local browser UI. The files stay on the user's computer; the browser sends them to the local app running at `127.0.0.1:8765`.
 
-1. Add PDF files. Use `Ajouter des PDFs...` multiple times when files are in different folders, or `Ajouter un dossier...` for one folder.
+1. Add PDF files. Use `Add PDFs...` multiple times when files are in different folders, or `Add folder...` for one folder.
 2. Select the Excel or CSV file containing identifiers.
-3. Select the output folder.
-4. Choose one merged PDF or one PDF per number.
+3. Choose one merged PDF or one PDF per number.
+4. Process and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
+
+The browser UI keeps local run history with summary stats in browser localStorage. The history is stored only on that computer.
 
 ## CLI Usage
 
@@ -53,6 +55,9 @@ Options:
 
 - `--mode separate`: creates one PDF per number, for example `12345.pdf`.
 - `--mode merged`: creates `matched_pages.pdf`.
+- `--web`: starts the local browser UI.
+- `--gui`: uses the older native file selection dialogs.
+- `--port`: changes the local browser UI port. The default `8765` keeps browser history stable.
 - `--no-gui`: fail instead of opening file dialogs when required arguments are missing.
 - `--verbose`: print each PDF as it is scanned.
 

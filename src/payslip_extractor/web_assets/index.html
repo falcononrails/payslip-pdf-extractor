@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payslip PDF Extractor</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f8;
+      --panel: #ffffff;
+      --ink: #182026;
+      --muted: #66727c;
+      --line: #d7dde2;
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+      --danger: #b42318;
+      --soft: #edf7f5;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .wrap {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    header .wrap {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 64px;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status-pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: var(--muted);
+      background: #fbfcfd;
+      white-space: nowrap;
+    }
+
+    main.wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 16px;
+      padding: 16px 0 28px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button,
+    .file-button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #ffffff;
+      color: var(--ink);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 7px 11px;
+      font: inherit;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    button:hover,
+    .file-button:hover {
+      border-color: #a9b4bc;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    button.primary:hover {
+      background: var(--accent-strong);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    input[type="file"] {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .file-list {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      min-height: 220px;
+      max-height: 360px;
+      overflow: auto;
+      background: #fbfcfd;
+    }
+
+    .file-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .file-item:last-child {
+      border-bottom: 0;
+    }
+
+    .file-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .file-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 20px;
+      text-align: center;
+    }
+
+    .mode-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      max-width: 420px;
+    }
+
+    .mode-toggle label {
+      margin: 0;
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 650;
+      text-align: center;
+    }
+
+    .mode-toggle input {
+      display: none;
+    }
+
+    .mode-toggle span {
+      display: block;
+      padding: 10px 12px;
+      background: #ffffff;
+    }
+
+    .mode-toggle input:checked + span {
+      background: var(--soft);
+      color: var(--accent-strong);
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      background: #fbfcfd;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .message {
+      margin-top: 12px;
+      border-radius: 7px;
+      padding: 10px 12px;
+      background: #eef5ff;
+      color: #24476b;
+    }
+
+    .message.error {
+      background: #fff0ed;
+      color: var(--danger);
+    }
+
+    .history-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .history-item {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      background: #fbfcfd;
+    }
+
+    .history-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .history-top strong {
+      font-size: 13px;
+    }
+
+    .history-stats {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      main.wrap {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Payslip PDF Extractor</h1>
+      <div class="status-pill" id="serverStatus">Local web UI</div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div>
+      <section>
+        <h2>Inputs</h2>
+        <div class="row">
+          <label class="file-button" for="pdfInput">Add PDFs...</label>
+          <input id="pdfInput" type="file" accept="application/pdf,.pdf" multiple>
+          <label class="file-button" for="folderInput">Add folder...</label>
+          <input id="folderInput" type="file" accept="application/pdf,.pdf" multiple webkitdirectory>
+          <button type="button" id="removeSelected">Remove selected</button>
+          <button type="button" id="clearPdfs">Clear</button>
+        </div>
+
+        <div class="file-list" id="pdfList">
+          <div class="empty">No PDFs selected</div>
+        </div>
+
+        <label for="numbersInput">Identifier file</label>
+        <div class="row">
+          <label class="file-button" for="numbersInput">Choose Excel or CSV...</label>
+          <input id="numbersInput" type="file" accept=".xlsx,.xlsm,.csv">
+          <span id="numbersName" class="file-meta">No file selected</span>
+        </div>
+
+        <label>Output mode</label>
+        <div class="mode-toggle">
+          <label>
+            <input type="radio" name="mode" value="separate" checked>
+            <span>One PDF per identifier</span>
+          </label>
+          <label>
+            <input type="radio" name="mode" value="merged">
+            <span>One merged PDF</span>
+          </label>
+        </div>
+
+        <div class="row" style="margin-top: 16px;">
+          <button class="primary" type="button" id="processButton">Process and download ZIP</button>
+          <span class="file-meta" id="selectionStats">0 PDFs selected</span>
+        </div>
+
+        <div id="messageBox" class="message" hidden></div>
+      </section>
+
+      <section style="margin-top: 16px;" id="lastRunSection" hidden>
+        <h2>Last run</h2>
+        <div class="summary">
+          <div class="metric"><strong id="lastMatchedIds">0</strong><span>Matched identifiers</span></div>
+          <div class="metric"><strong id="lastPages">0</strong><span>Pages extracted</span></div>
+          <div class="metric"><strong id="lastDuration">0s</strong><span>Processing time</span></div>
+        </div>
+      </section>
+    </div>
+
+    <aside>
+      <section>
+        <div class="row" style="justify-content: space-between; margin-bottom: 8px;">
+          <h2 style="margin: 0;">History</h2>
+          <button type="button" id="clearHistory">Clear history</button>
+        </div>
+        <div class="history-list" id="historyList"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const pdfInput = document.getElementById("pdfInput");
+    const folderInput = document.getElementById("folderInput");
+    const numbersInput = document.getElementById("numbersInput");
+    const numbersName = document.getElementById("numbersName");
+    const pdfList = document.getElementById("pdfList");
+    const selectionStats = document.getElementById("selectionStats");
+    const processButton = document.getElementById("processButton");
+    const messageBox = document.getElementById("messageBox");
+    const historyList = document.getElementById("historyList");
+    const lastRunSection = document.getElementById("lastRunSection");
+    const lastMatchedIds = document.getElementById("lastMatchedIds");
+    const lastPages = document.getElementById("lastPages");
+    const lastDuration = document.getElementById("lastDuration");
+
+    const historyKey = "payslipExtractor.history.v1";
+    let pdfFiles = [];
+    let selectedIndexes = new Set();
+    let numbersFile = null;
+
+    function fileKey(file) {
+      return [file.name, file.size, file.lastModified, file.webkitRelativePath || ""].join(":");
+    }
+
+    function addFiles(files) {
+      const seen = new Set(pdfFiles.map(fileKey));
+      for (const file of files) {
+        if (!file.name.toLowerCase().endsWith(".pdf")) continue;
+        const key = fileKey(file);
+        if (seen.has(key)) continue;
+        pdfFiles.push(file);
+        seen.add(key);
+      }
+      renderPdfList();
+    }
+
+    function renderPdfList() {
+      selectedIndexes = new Set([...selectedIndexes].filter(index => index < pdfFiles.length));
+      selectionStats.textContent = `${pdfFiles.length} PDF${pdfFiles.length === 1 ? "" : "s"} selected`;
+
+      if (pdfFiles.length === 0) {
+        pdfList.innerHTML = '<div class="empty">No PDFs selected</div>';
+        return;
+      }
+
+      pdfList.innerHTML = "";
+      pdfFiles.forEach((file, index) => {
+        const item = document.createElement("div");
+        item.className = "file-item";
+        item.tabIndex = 0;
+        item.dataset.index = String(index);
+        if (selectedIndexes.has(index)) {
+          item.style.background = "#edf7f5";
+        }
+
+        const name = document.createElement("div");
+        name.className = "file-name";
+        name.textContent = file.webkitRelativePath || file.name;
+
+        const meta = document.createElement("div");
+        meta.className = "file-meta";
+        meta.textContent = formatBytes(file.size);
+
+        item.append(name, meta);
+        item.addEventListener("click", () => {
+          if (selectedIndexes.has(index)) selectedIndexes.delete(index);
+          else selectedIndexes.add(index);
+          renderPdfList();
+        });
+        pdfList.appendChild(item);
+      });
+    }
+
+    function renderHistory() {
+      const history = getHistory();
+      if (history.length === 0) {
+        historyList.innerHTML = '<div class="empty">No local history yet</div>';
+        return;
+      }
+
+      historyList.innerHTML = "";
+      for (const item of history) {
+        const row = document.createElement("div");
+        row.className = "history-item";
+        row.innerHTML = `
+          <div class="history-top">
+            <strong>${escapeHtml(item.mode === "merged" ? "Merged" : "Separate")}</strong>
+            <span class="file-meta">${escapeHtml(formatDate(item.createdAt))}</span>
+          </div>
+          <div class="history-stats">
+            ${item.pdfCount} PDFs · ${item.matchedNumbersCount}/${item.numbersCount} identifiers ·
+            ${item.matchedPagesCount} pages · ${formatDuration(item.durationSeconds)}
+          </div>
+        `;
+        historyList.appendChild(row);
+      }
+    }
+
+    function getHistory() {
+      try {
+        return JSON.parse(localStorage.getItem(historyKey) || "[]");
+      } catch {
+        return [];
+      }
+    }
+
+    function saveHistory(item) {
+      const history = [item, ...getHistory()].slice(0, 25);
+      localStorage.setItem(historyKey, JSON.stringify(history));
+      renderHistory();
+    }
+
+    function selectedMode() {
+      return document.querySelector('input[name="mode"]:checked').value;
+    }
+
+    function showMessage(text, isError = false) {
+      messageBox.textContent = text;
+      messageBox.className = isError ? "message error" : "message";
+      messageBox.hidden = false;
+    }
+
+    function clearMessage() {
+      messageBox.hidden = true;
+      messageBox.textContent = "";
+    }
+
+    async function processFiles() {
+      clearMessage();
+      if (pdfFiles.length === 0) {
+        showMessage("Add at least one PDF.", true);
+        return;
+      }
+      if (!numbersFile) {
+        showMessage("Choose an Excel or CSV identifier file.", true);
+        return;
+      }
+
+      const form = new FormData();
+      form.append("mode", selectedMode());
+      for (const file of pdfFiles) {
+        form.append("pdf_files", file, file.webkitRelativePath || file.name);
+      }
+      form.append("numbers_file", numbersFile, numbersFile.name);
+
+      processButton.disabled = true;
+      showMessage("Processing locally. Keep this window open.");
+      try {
+        const response = await fetch("/api/extract", { method: "POST", body: form });
+        if (!response.ok) {
+          let errorText = `Extraction failed with HTTP ${response.status}.`;
+          try {
+            const payload = await response.json();
+            if (payload.error) errorText = payload.error;
+          } catch {}
+          showMessage(errorText, true);
+          return;
+        }
+
+        const blob = await response.blob();
+        const summary = parseSummaryHeader(response.headers.get("X-Extraction-Summary"));
+        const downloadName = summary.downloadName || `payslip-extractor-results-${Date.now()}.zip`;
+        downloadBlob(blob, downloadName);
+        saveHistory(summary);
+        updateLastRun(summary);
+        showMessage(`Done. Downloaded ${downloadName}.`);
+      } catch (error) {
+        showMessage(`Extraction failed: ${error}`, true);
+      } finally {
+        processButton.disabled = false;
+      }
+    }
+
+    function parseSummaryHeader(value) {
+      if (!value) return {};
+      try {
+        return JSON.parse(new TextDecoder().decode(base64UrlToBytes(value)));
+      } catch {
+        return {};
+      }
+    }
+
+    function base64UrlToBytes(value) {
+      const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - base64.length % 4) % 4);
+      const binary = atob(padded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function updateLastRun(summary) {
+      lastRunSection.hidden = false;
+      lastMatchedIds.textContent = String(summary.matchedNumbersCount || 0);
+      lastPages.textContent = String(summary.matchedPagesCount || 0);
+      lastDuration.textContent = formatDuration(summary.durationSeconds || 0);
+    }
+
+    function formatBytes(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      const units = ["KB", "MB", "GB"];
+      let value = bytes / 1024;
+      let unit = units.shift();
+      while (value >= 1024 && units.length) {
+        value /= 1024;
+        unit = units.shift();
+      }
+      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+    }
+
+    function formatDuration(seconds) {
+      const value = Number(seconds) || 0;
+      if (value < 60) return `${Math.round(value)}s`;
+      const minutes = Math.floor(value / 60);
+      const rest = Math.round(value % 60);
+      return `${minutes}m ${rest}s`;
+    }
+
+    function formatDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    pdfInput.addEventListener("change", event => {
+      addFiles(event.target.files);
+      pdfInput.value = "";
+    });
+
+    folderInput.addEventListener("change", event => {
+      addFiles(event.target.files);
+      folderInput.value = "";
+    });
+
+    numbersInput.addEventListener("change", event => {
+      numbersFile = event.target.files[0] || null;
+      numbersName.textContent = numbersFile ? `${numbersFile.name} (${formatBytes(numbersFile.size)})` : "No file selected";
+    });
+
+    document.getElementById("removeSelected").addEventListener("click", () => {
+      pdfFiles = pdfFiles.filter((_, index) => !selectedIndexes.has(index));
+      selectedIndexes.clear();
+      renderPdfList();
+    });
+
+    document.getElementById("clearPdfs").addEventListener("click", () => {
+      pdfFiles = [];
+      selectedIndexes.clear();
+      renderPdfList();
+    });
+
+    document.getElementById("clearHistory").addEventListener("click", () => {
+      localStorage.removeItem(historyKey);
+      renderHistory();
+    });
+
+    processButton.addEventListener("click", processFiles);
+    renderPdfList();
+    renderHistory();
+  </script>
+</body>
+</html>

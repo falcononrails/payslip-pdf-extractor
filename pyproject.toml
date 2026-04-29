@@ -28,6 +28,9 @@ payslip-extractor = "payslip_extractor.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+payslip_extractor = ["web_assets/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
