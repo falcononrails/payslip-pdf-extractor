@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import socket
 import tempfile
 import threading
 import time
@@ -42,6 +43,15 @@ class MultipartForm:
     files: dict[str, list[UploadedFile]]
 
 
+class LocalWebServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def launch_web_app(host: str = "127.0.0.1", port: int = DEFAULT_WEB_PORT, open_browser: bool = True) -> int:
     server = bind_web_server(host, port)
     actual_host, actual_port = server.server_address
@@ -69,7 +79,7 @@ def bind_web_server(host: str, port: int) -> ThreadingHTTPServer:
 
     for candidate_port in candidate_ports:
         try:
-            return ThreadingHTTPServer((host, candidate_port), WebHandler)
+            return LocalWebServer((host, candidate_port), WebHandler)
         except OSError as exc:
             last_error = exc
 
