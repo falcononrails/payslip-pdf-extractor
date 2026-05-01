@@ -405,6 +405,7 @@
         <div class="row">
           <button type="button" id="chooseLocalFolder">Choose root folder...</button>
           <button type="button" id="choosePdfFiles">Add PDF files...</button>
+          <button type="button" id="clearSources" disabled>Clear sources</button>
           <button type="button" id="previewLocalFolder" disabled>Preview selection</button>
         </div>
         <div class="file-meta" id="localFolderName" style="margin-top: 10px;">No folder selected</div>
@@ -496,6 +497,7 @@
     const historyList = document.getElementById("historyList");
     const chooseLocalFolder = document.getElementById("chooseLocalFolder");
     const choosePdfFiles = document.getElementById("choosePdfFiles");
+    const clearSources = document.getElementById("clearSources");
     const previewLocalFolder = document.getElementById("previewLocalFolder");
     const processLocalFolder = document.getElementById("processLocalFolder");
     const localFolderName = document.getElementById("localFolderName");
@@ -642,7 +644,25 @@
     }
 
     function updatePreviewButton() {
-      previewLocalFolder.disabled = !localFolderPath && manualPdfPaths.length === 0;
+      const hasPdfSources = Boolean(localFolderPath) || manualPdfPaths.length > 0;
+      clearSources.disabled = !hasPdfSources;
+      previewLocalFolder.disabled = !hasPdfSources;
+    }
+
+    function clearPdfSources() {
+      localFolderPath = "";
+      manualPdfPaths = [];
+      localFolderPreview = null;
+      localFolderName.textContent = "No folder selected";
+      manualPdfName.textContent = "No individual PDFs added";
+      processLocalFolder.disabled = true;
+      progressSection.hidden = true;
+      progressLog.innerHTML = "";
+      setProgressStatus("Ready");
+      uploadProgressLine = null;
+      renderFolderPreview(null);
+      updatePreviewButton();
+      showMessage("PDF sources cleared.");
     }
 
     async function previewFolder() {
@@ -1055,6 +1075,7 @@
 
     chooseLocalFolder.addEventListener("click", chooseFolder);
     choosePdfFiles.addEventListener("click", choosePdfs);
+    clearSources.addEventListener("click", clearPdfSources);
     previewLocalFolder.addEventListener("click", previewFolder);
     processLocalFolder.addEventListener("click", processFolderPreview);
     function invalidatePreview() {
