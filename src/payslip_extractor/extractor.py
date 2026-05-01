@@ -54,6 +54,7 @@ def run_extraction(
     numbers_file: Path | str,
     output_dir: Path | str,
     mode: OutputMode,
+    extra_audit_rows: Iterable[AuditRow] = (),
 ) -> ExtractionSummary:
     pdfs = [Path(path).expanduser().resolve() for path in pdf_paths]
     if not pdfs:
@@ -98,6 +99,7 @@ def run_extraction(
         logger.info("No matching pages found. No output PDFs created.")
 
     audit_csv = output_path / "audit.csv"
+    audit_rows.extend(extra_audit_rows)
     write_audit_csv(audit_csv, audit_rows)
 
     return ExtractionSummary(

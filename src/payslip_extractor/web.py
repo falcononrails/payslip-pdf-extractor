@@ -25,6 +25,8 @@ from urllib.parse import urlparse
 
 from payslip_extractor import __version__
 from payslip_extractor.extractor import ExtractionError, run_extraction
+from payslip_extractor.folder_scan import FolderScanResult, scan_pdf_sources
+from payslip_extractor.models import AuditRow
 from payslip_extractor.numbers import NumberFileError
 
 logger = logging.getLogger("payslip_extractor")
@@ -32,8 +34,13 @@ READ_CHUNK_SIZE = 1024 * 1024
 DEFAULT_WEB_PORT = 8765
 MAX_JOB_MESSAGES = 300
 JOB_RETENTION_SECONDS = 60 * 60
+PREVIEW_SAMPLE_SIZE = 20
 JOBS: dict[str, "ExtractionJob"] = {}
 JOBS_LOCK = threading.Lock()
+FOLDER_PREVIEWS: dict[str, "FolderPreview"] = {}
+FOLDER_PREVIEWS_LOCK = threading.Lock()
+FOLDER_PREVIEW_JOBS: dict[str, "FolderPreviewJob"] = {}
+FOLDER_PREVIEW_JOBS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,72 @@ class MultipartForm:
     files: dict[str, list[UploadedFile]]
 
 
+@dataclass(frozen=True)
+class FolderPreview:
+    id: str
+    scan: FolderScanResult
+    created_monotonic: float
+
+    def snapshot(self) -> dict[str, object]:
+        return folder_preview_payload(self.id, self.scan)
+
+    def is_expired(self, now: float) -> bool:
+        return now - self.created_monotonic > JOB_RETENTION_SECONDS
+
+
+@dataclass
+class FolderPreviewJob:
+    id: str
+    root_path: str
+    pdf_paths: tuple[str, ...]
+    exclude_terms: str | list[str]
+    status: str = "queued"
+    messages: list[dict[str, str]] = field(default_factory=list)
+    preview: FolderPreview | None = None
+    error: str | None = None
+    completed_monotonic: float | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def append_message(self, text: str, level: str = "info") -> None:
+        with self._lock:
+            self.messages.append({"time": datetime.now().strftime("%H:%M:%S"), "level": level, "text": text})
+            if len(self.messages) > MAX_JOB_MESSAGES:
+                del self.messages[: len(self.messages) - MAX_JOB_MESSAGES]
+
+    def set_status(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+
+    def mark_done(self, preview: FolderPreview) -> None:
+        with self._lock:
+            self.status = "done"
+            self.preview = preview
+            self.completed_monotonic = time.monotonic()
+
+    def mark_error(self, error: str) -> None:
+        with self._lock:
+            self.status = "error"
+            self.error = error
+            self.completed_monotonic = time.monotonic()
+
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            payload: dict[str, object] = {
+                "previewJobId": self.id,
+                "status": self.status,
+                "messages": list(self.messages),
+            }
+            if self.error:
+                payload["error"] = self.error
+            if self.preview is not None:
+                payload["preview"] = self.preview.snapshot()
+            return payload
+
+    def is_expired(self, now: float) -> bool:
+        with self._lock:
+            return self.completed_monotonic is not None and now - self.completed_monotonic > JOB_RETENTION_SECONDS
+
+
 @dataclass
 class ExtractionJob:
     id: str
@@ -56,6 +129,8 @@ class ExtractionJob:
     pdf_paths: tuple[Path, ...]
     numbers_file: Path
     mode: str
+    skipped_audit_rows: tuple[AuditRow, ...] = ()
+    root_path: Path | None = None
     status: str = "queued"
     messages: list[dict[str, str]] = field(default_factory=list)
     summary_payload: dict[str, object] | None = None
@@ -173,17 +248,28 @@ class WebHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/jobs/"):
             self._handle_job_request(path)
             return
+        if path.startswith("/api/previews/"):
+            self._handle_preview_request(path)
+            return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path != "/api/extract":
+        if path == "/api/folder/select":
+            handler = self._select_local_folder
+        elif path == "/api/pdfs/select":
+            handler = self._select_local_pdfs
+        elif path == "/api/folder/preview":
+            handler = self._create_folder_preview
+        elif path == "/api/folder/start":
+            handler = self._start_folder_extract_job
+        else:
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
 
         try:
-            self._start_extract_job()
+            handler()
         except UserFacingWebError as exc:
             self._send_json({"error": str(exc)}, status=exc.status)
         except Exception as exc:
@@ -199,7 +285,48 @@ class WebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _start_extract_job(self) -> None:
+    def _select_local_folder(self) -> None:
+        folder = open_native_folder_dialog()
+        if folder is None:
+            self._send_json({"cancelled": True})
+            return
+
+        self._send_json({"cancelled": False, "path": str(folder)})
+
+    def _select_local_pdfs(self) -> None:
+        paths = open_native_pdf_dialog()
+        self._send_json({"cancelled": not paths, "paths": [str(path) for path in paths]})
+
+    def _create_folder_preview(self) -> None:
+        payload = self._read_json()
+        root_path = str(payload.get("rootPath") or "").strip()
+        raw_pdf_paths = payload.get("pdfPaths", [])
+        pdf_paths = [str(path) for path in raw_pdf_paths] if isinstance(raw_pdf_paths, list) else []
+        if not root_path and not pdf_paths:
+            raise UserFacingWebError("Choose a root folder or add PDF files first.")
+        exclude_terms = payload.get("excludeTerms", "")
+
+        job = FolderPreviewJob(
+            id=uuid.uuid4().hex,
+            root_path=root_path,
+            pdf_paths=tuple(pdf_paths),
+            exclude_terms=exclude_terms,  # type: ignore[arg-type]
+        )
+        job.append_message("Preview requested.")
+        register_folder_preview_job(job)
+        thread = threading.Thread(target=run_folder_preview_job, args=(job,), daemon=True)
+        thread.start()
+
+        self._send_json(
+            {
+                "previewJobId": job.id,
+                "status": job.status,
+                "statusUrl": f"/api/previews/{job.id}",
+            },
+            status=HTTPStatus.ACCEPTED,
+        )
+
+    def _start_folder_extract_job(self) -> None:
         content_length = int(self.headers.get("Content-Length", "0") or "0")
         if content_length <= 0:
             raise UserFacingWebError("No upload body received.")
@@ -207,26 +334,52 @@ class WebHandler(BaseHTTPRequestHandler):
         workspace = Path(tempfile.mkdtemp(prefix="payslip-web-"))
         try:
             form = parse_multipart_upload(self.rfile, self.headers.get("Content-Type", ""), content_length, workspace)
+            preview_id = first_form_value(form.fields, "preview_id", "")
+            preview = get_folder_preview(preview_id)
+            if preview is None:
+                raise UserFacingWebError("PDF preview expired. Preview the selection again.")
 
             mode = first_form_value(form.fields, "mode", "separate")
             if mode not in {"separate", "merged"}:
                 raise UserFacingWebError("Invalid output mode.")
 
-            pdf_files = form.files.get("pdf_files", [])
             number_files = form.files.get("numbers_file", [])
-            if not pdf_files:
-                raise UserFacingWebError("Select at least one PDF file.")
             if not number_files:
                 raise UserFacingWebError("Select an Excel or CSV identifier file.")
+
+            included_paths = tuple(item.path for item in preview.scan.included)
+            if not included_paths:
+                raise UserFacingWebError("No PDFs are included by the current filters.")
+
+            skipped_rows = tuple(
+                AuditRow(
+                    status="skipped",
+                    source_pdf=item.path,
+                    page_number="",
+                    matched_numbers="",
+                    output_pdf="",
+                    message=item.reason,
+                )
+                for item in preview.scan.skipped
+            )
 
             job = ExtractionJob(
                 id=uuid.uuid4().hex,
                 workspace=workspace,
-                pdf_paths=tuple(upload.path for upload in pdf_files),
+                pdf_paths=included_paths,
                 numbers_file=number_files[0].path,
                 mode=mode,
+                skipped_audit_rows=skipped_rows,
+                root_path=preview.scan.root_path,
             )
-            job.append_message("Upload received. Preparing extraction.")
+            if preview.scan.root_path is not None:
+                job.append_message(f"Folder selected: {preview.scan.root_path}")
+            if preview.scan.root_path is None:
+                job.append_message("Using manually selected PDF file(s).")
+            job.append_message(f"Enumerated {preview.scan.total_pdf_count} PDF file(s).")
+            job.append_message(
+                f"Filters included {len(preview.scan.included)} PDF(s) and skipped {len(preview.scan.skipped)} PDF(s)."
+            )
             register_job(job)
             thread = threading.Thread(target=run_extraction_job, args=(job,), daemon=True)
             thread.start()
@@ -270,6 +423,33 @@ class WebHandler(BaseHTTPRequestHandler):
 
         download_name = str(summary_payload.get("downloadName") or zip_path.name)
         self._send_file(zip_path, "application/zip", download_name, summary_payload)
+
+    def _handle_preview_request(self, path: str) -> None:
+        match = re.fullmatch(r"/api/previews/([0-9a-f]{32})", path)
+        if not match:
+            self._send_json({"error": "Preview job not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        job = get_folder_preview_job(match.group(1))
+        if job is None:
+            self._send_json({"error": "Preview job not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        self._send_json(job.snapshot())
+
+    def _read_json(self) -> dict[str, object]:
+        content_length = int(self.headers.get("Content-Length", "0") or "0")
+        if content_length <= 0:
+            return {}
+
+        data = self.rfile.read(content_length)
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise UserFacingWebError("Expected JSON request body.") from exc
+        if not isinstance(payload, dict):
+            raise UserFacingWebError("Expected JSON object request body.")
+        return payload
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -326,18 +506,42 @@ class JobLogHandler(logging.Handler):
 
 
 def register_job(job: ExtractionJob) -> None:
-    cleanup_finished_jobs()
+    cleanup_expired_state()
     with JOBS_LOCK:
         JOBS[job.id] = job
 
 
 def get_job(job_id: str) -> ExtractionJob | None:
-    cleanup_finished_jobs()
+    cleanup_expired_state()
     with JOBS_LOCK:
         return JOBS.get(job_id)
 
 
-def cleanup_finished_jobs() -> None:
+def register_folder_preview(preview: FolderPreview) -> None:
+    cleanup_expired_state()
+    with FOLDER_PREVIEWS_LOCK:
+        FOLDER_PREVIEWS[preview.id] = preview
+
+
+def register_folder_preview_job(job: FolderPreviewJob) -> None:
+    cleanup_expired_state()
+    with FOLDER_PREVIEW_JOBS_LOCK:
+        FOLDER_PREVIEW_JOBS[job.id] = job
+
+
+def get_folder_preview(preview_id: str) -> FolderPreview | None:
+    cleanup_expired_state()
+    with FOLDER_PREVIEWS_LOCK:
+        return FOLDER_PREVIEWS.get(preview_id)
+
+
+def get_folder_preview_job(job_id: str) -> FolderPreviewJob | None:
+    cleanup_expired_state()
+    with FOLDER_PREVIEW_JOBS_LOCK:
+        return FOLDER_PREVIEW_JOBS.get(job_id)
+
+
+def cleanup_expired_state() -> None:
     now = time.monotonic()
     expired_jobs: list[ExtractionJob] = []
     with JOBS_LOCK:
@@ -348,6 +552,118 @@ def cleanup_finished_jobs() -> None:
 
     for job in expired_jobs:
         shutil.rmtree(job.workspace, ignore_errors=True)
+
+    with FOLDER_PREVIEWS_LOCK:
+        for preview_id, preview in list(FOLDER_PREVIEWS.items()):
+            if preview.is_expired(now):
+                del FOLDER_PREVIEWS[preview_id]
+
+    with FOLDER_PREVIEW_JOBS_LOCK:
+        for job_id, job in list(FOLDER_PREVIEW_JOBS.items()):
+            if job.is_expired(now):
+                del FOLDER_PREVIEW_JOBS[job_id]
+
+
+def folder_preview_payload(preview_id: str, scan: FolderScanResult) -> dict[str, object]:
+    return {
+        "previewId": preview_id,
+        "rootPath": str(scan.root_path) if scan.root_path is not None else "",
+        "excludeTerms": list(scan.exclude_terms),
+        "totalPdfCount": scan.total_pdf_count,
+        "includedCount": len(scan.included),
+        "skippedCount": len(scan.skipped),
+        "includedSamples": [
+            {"path": item.relative_path}
+            for item in scan.included[:PREVIEW_SAMPLE_SIZE]
+        ],
+        "skippedSamples": [
+            {"path": item.relative_path, "reason": item.reason}
+            for item in scan.skipped[:PREVIEW_SAMPLE_SIZE]
+        ],
+    }
+
+
+def run_folder_preview_job(job: FolderPreviewJob) -> None:
+    job.set_status("running")
+    try:
+        root_label = job.root_path or "manual PDF selection"
+        job.append_message(f"Starting preview for {root_label}.")
+        if job.root_path:
+            job.append_message("Python is listing folder entries now; PDF contents are not copied during preview.")
+        else:
+            job.append_message("No folder tree to walk; checking the selected PDF path(s).")
+        if job.pdf_paths:
+            job.append_message(f"Adding {len(job.pdf_paths)} manually selected PDF file(s).")
+
+        scan = scan_pdf_sources(
+            root_path=job.root_path or None,
+            pdf_paths=job.pdf_paths,
+            exclude_terms=job.exclude_terms,
+            progress_callback=job.append_message,
+        )
+        job.append_message(
+            f"Preview ready: {len(scan.included)} selected, {len(scan.skipped)} skipped, {scan.total_pdf_count} total."
+        )
+        preview = FolderPreview(id=job.id, scan=scan, created_monotonic=time.monotonic())
+        register_folder_preview(preview)
+        job.mark_done(preview)
+    except ValueError as exc:
+        job.append_message(str(exc), "error")
+        job.mark_error(str(exc))
+    except Exception as exc:
+        logger.exception("Unexpected PDF preview failure")
+        job.append_message(f"Unexpected error: {exc}", "error")
+        job.mark_error(f"Unexpected error: {exc}")
+
+
+def open_native_folder_dialog() -> Path | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise UserFacingWebError(f"Could not open folder picker: {exc}") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.update()
+    try:
+        try:
+            root.attributes("-topmost", True)
+            root.lift()
+        except tk.TclError:
+            pass
+        folder = filedialog.askdirectory(parent=root, title="Select root folder containing PDFs")
+        if not folder:
+            return None
+        return Path(folder).expanduser().resolve(strict=False)
+    finally:
+        root.destroy()
+
+
+def open_native_pdf_dialog() -> tuple[Path, ...]:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception as exc:
+        raise UserFacingWebError(f"Could not open PDF picker: {exc}") from exc
+
+    root = tk.Tk()
+    root.withdraw()
+    root.update()
+    try:
+        try:
+            root.attributes("-topmost", True)
+            root.lift()
+        except tk.TclError:
+            pass
+        paths = filedialog.askopenfilenames(
+            parent=root,
+            title="Select PDF files",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        return tuple(Path(path).expanduser().resolve(strict=False) for path in paths)
+    finally:
+        root.destroy()
 
 
 def run_extraction_job(job: ExtractionJob) -> None:
@@ -371,12 +687,16 @@ def run_extraction_job(job: ExtractionJob) -> None:
 
     start = time.monotonic()
     try:
-        logger.info("Starting extraction job.")
+        if job.root_path is not None:
+            logger.info("Starting extraction job from local folder.")
+        else:
+            logger.info("Starting extraction job.")
         summary = run_extraction(
             pdf_paths=job.pdf_paths,
             numbers_file=job.numbers_file,
             output_dir=output_dir,
             mode=job.mode,  # type: ignore[arg-type]
+            extra_audit_rows=job.skipped_audit_rows,
         )
 
         duration_seconds = round(time.monotonic() - start, 2)
@@ -395,7 +715,10 @@ def run_extraction_job(job: ExtractionJob) -> None:
             "durationSeconds": duration_seconds,
             "downloadName": zip_path.name,
             "createdAt": created_at.isoformat(timespec="seconds"),
+            "skippedPdfCount": len(job.skipped_audit_rows),
         }
+        if job.root_path is not None:
+            summary_payload["rootPath"] = str(job.root_path)
         logger.info("Download ready.")
         job.mark_done(summary_payload, zip_path)
     except (ExtractionError, NumberFileError) as exc:

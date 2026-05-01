@@ -22,15 +22,17 @@ Download one of the GitHub Actions artifacts:
 - `payslip-extractor-onefile-windows`: one `.exe`.
 - `payslip-extractor-folder-windows`: fallback portable folder if the one-file executable is blocked by antivirus policy.
 
-Double-clicking the executable opens a local browser UI. The files stay on the user's computer; the browser sends them to the local app running at `127.0.0.1:8765`.
+Double-clicking the executable opens a local browser UI. PDF folders/files are selected by the local Python app and read from their existing paths; PDFs are not browser-uploaded or copied before preview. The Excel/CSV identifier file is copied into the temporary local job workspace when extraction starts.
 
-1. Add PDF files. Use `Add PDFs...` multiple times when files are in different folders, or `Add folder...` for one folder.
-2. Select the Excel or CSV file containing identifiers.
-3. Choose one merged PDF or one PDF per number.
-4. Process the files, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
+1. Choose a root folder, add individual PDF files, or do both. The local app reads those PDF paths directly.
+2. Enter folder/name exclude terms such as `archive`, `backup`, `old`, or `temp` when needed.
+3. Preview the PDF selection and confirm the selected/skipped counts.
+4. Select the Excel or CSV file containing identifiers.
+5. Choose one merged PDF or one PDF per number.
+6. Process the preview, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
 
 The browser UI keeps local run history with summary stats in browser localStorage. The history is stored only on that computer.
-The progress panel first shows the copy/upload phase into the local extractor; if the selected files live on a shared folder or VPN path, that is when they are read from the network location.
+The progress panel shows preview progress first. On shared folders or VPN paths, this is where the Python app lists directory entries and reports folder-walk/PDF counts. During extraction, the same panel shows PDF/page scanning progress, packaging, and download readiness. Skipped PDFs are written to `audit.csv` with status `skipped`.
 
 ## CLI Usage
 

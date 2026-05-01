@@ -149,6 +149,16 @@
       pointer-events: none;
     }
 
+    input[type="text"] {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      color: var(--ink);
+      font: inherit;
+      min-height: 36px;
+      padding: 7px 10px;
+      width: min(560px, 100%);
+    }
+
     .file-list {
       margin-top: 12px;
       border: 1px solid var(--line);
@@ -297,6 +307,48 @@
       font-weight: 600;
     }
 
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .path-columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .path-list {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfcfd;
+      max-height: 180px;
+      overflow: auto;
+    }
+
+    .path-row {
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr);
+      gap: 8px;
+      overflow-wrap: anywhere;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+
+    .path-row:last-child {
+      border-bottom: 0;
+    }
+
+    .path-mark {
+      color: var(--accent-strong);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
     .history-list {
       display: grid;
       gap: 10px;
@@ -329,6 +381,11 @@
       main.wrap {
         grid-template-columns: 1fr;
       }
+
+      .path-columns,
+      .preview-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -344,17 +401,34 @@
     <div>
       <section>
         <h2>Inputs</h2>
+        <label>PDF sources</label>
         <div class="row">
-          <label class="file-button" for="pdfInput">Add PDFs...</label>
-          <input id="pdfInput" type="file" accept="application/pdf,.pdf" multiple>
-          <label class="file-button" for="folderInput">Add folder...</label>
-          <input id="folderInput" type="file" accept="application/pdf,.pdf" multiple webkitdirectory>
-          <button type="button" id="removeSelected">Remove selected</button>
-          <button type="button" id="clearPdfs">Clear</button>
+          <button type="button" id="chooseLocalFolder">Choose root folder...</button>
+          <button type="button" id="choosePdfFiles">Add PDF files...</button>
+          <button type="button" id="previewLocalFolder" disabled>Preview selection</button>
         </div>
+        <div class="file-meta" id="localFolderName" style="margin-top: 10px;">No folder selected</div>
+        <div class="file-meta" id="manualPdfName" style="margin-top: 4px;">No individual PDFs added</div>
 
-        <div class="file-list" id="pdfList">
-          <div class="empty">No PDFs selected</div>
+        <label for="excludeTerms">Exclude folder/name terms</label>
+        <input id="excludeTerms" type="text" placeholder="archive, backup, old, temp">
+
+        <div id="folderPreview" hidden>
+          <div class="preview-grid">
+            <div class="metric"><strong id="previewTotal">0</strong><span>PDFs found</span></div>
+            <div class="metric"><strong id="previewIncluded">0</strong><span>PDFs selected</span></div>
+            <div class="metric"><strong id="previewSkipped">0</strong><span>PDFs skipped</span></div>
+          </div>
+          <div class="path-columns">
+            <div>
+              <label>Selected sample</label>
+              <div class="path-list" id="includedSample"></div>
+            </div>
+            <div>
+              <label>Skipped sample</label>
+              <div class="path-list" id="skippedSample"></div>
+            </div>
+          </div>
         </div>
 
         <label for="numbersInput">Identifier file</label>
@@ -377,8 +451,7 @@
         </div>
 
         <div class="row" style="margin-top: 16px;">
-          <button class="primary" type="button" id="processButton">Process and download ZIP</button>
-          <span class="file-meta" id="selectionStats">0 PDFs selected</span>
+          <button class="primary" type="button" id="processLocalFolder" disabled>Process preview and download ZIP</button>
         </div>
 
         <div id="messageBox" class="message" hidden></div>
@@ -414,15 +487,23 @@
   </main>
 
   <script>
-    const pdfInput = document.getElementById("pdfInput");
-    const folderInput = document.getElementById("folderInput");
     const numbersInput = document.getElementById("numbersInput");
     const numbersName = document.getElementById("numbersName");
-    const pdfList = document.getElementById("pdfList");
-    const selectionStats = document.getElementById("selectionStats");
-    const processButton = document.getElementById("processButton");
     const messageBox = document.getElementById("messageBox");
     const historyList = document.getElementById("historyList");
+    const chooseLocalFolder = document.getElementById("chooseLocalFolder");
+    const choosePdfFiles = document.getElementById("choosePdfFiles");
+    const previewLocalFolder = document.getElementById("previewLocalFolder");
+    const processLocalFolder = document.getElementById("processLocalFolder");
+    const localFolderName = document.getElementById("localFolderName");
+    const manualPdfName = document.getElementById("manualPdfName");
+    const excludeTerms = document.getElementById("excludeTerms");
+    const folderPreview = document.getElementById("folderPreview");
+    const previewTotal = document.getElementById("previewTotal");
+    const previewIncluded = document.getElementById("previewIncluded");
+    const previewSkipped = document.getElementById("previewSkipped");
+    const includedSample = document.getElementById("includedSample");
+    const skippedSample = document.getElementById("skippedSample");
     const progressSection = document.getElementById("progressSection");
     const progressStatus = document.getElementById("progressStatus");
     const progressLog = document.getElementById("progressLog");
@@ -432,63 +513,11 @@
     const lastDuration = document.getElementById("lastDuration");
 
     const historyKey = "payslipExtractor.history.v1";
-    let pdfFiles = [];
-    let selectedIndexes = new Set();
     let numbersFile = null;
     let uploadProgressLine = null;
-
-    function fileKey(file) {
-      return [file.name, file.size, file.lastModified, file.webkitRelativePath || ""].join(":");
-    }
-
-    function addFiles(files) {
-      const seen = new Set(pdfFiles.map(fileKey));
-      for (const file of files) {
-        if (!file.name.toLowerCase().endsWith(".pdf")) continue;
-        const key = fileKey(file);
-        if (seen.has(key)) continue;
-        pdfFiles.push(file);
-        seen.add(key);
-      }
-      renderPdfList();
-    }
-
-    function renderPdfList() {
-      selectedIndexes = new Set([...selectedIndexes].filter(index => index < pdfFiles.length));
-      selectionStats.textContent = `${pdfFiles.length} PDF${pdfFiles.length === 1 ? "" : "s"} selected`;
-
-      if (pdfFiles.length === 0) {
-        pdfList.innerHTML = '<div class="empty">No PDFs selected</div>';
-        return;
-      }
-
-      pdfList.innerHTML = "";
-      pdfFiles.forEach((file, index) => {
-        const item = document.createElement("div");
-        item.className = "file-item";
-        item.tabIndex = 0;
-        item.dataset.index = String(index);
-        if (selectedIndexes.has(index)) {
-          item.style.background = "#edf7f5";
-        }
-
-        const name = document.createElement("div");
-        name.className = "file-name";
-        name.textContent = file.webkitRelativePath || file.name;
-
-        const meta = document.createElement("div");
-        meta.className = "file-meta";
-        meta.textContent = formatBytes(file.size);
-
-        item.append(name, meta);
-        item.addEventListener("click", () => {
-          if (selectedIndexes.has(index)) selectedIndexes.delete(index);
-          else selectedIndexes.add(index);
-          renderPdfList();
-        });
-        pdfList.appendChild(item);
-      });
-    }
+    let localFolderPath = "";
+    let manualPdfPaths = [];
+    let localFolderPreview = null;
 
     function renderHistory() {
       const history = getHistory();
@@ -501,6 +530,8 @@
       for (const item of history) {
         const row = document.createElement("div");
         row.className = "history-item";
+        const skipped = Number(item.skippedPdfCount || 0);
+        const skippedText = skipped ? ` - ${skipped} skipped` : "";
         row.innerHTML = `
           <div class="history-top">
             <strong>${escapeHtml(item.mode === "merged" ? "Merged" : "Separate")}</strong>
@@ -511,6 +542,9 @@
             ${item.matchedPagesCount} pages · ${formatDuration(item.durationSeconds)}
           </div>
         `;
+        if (skipped) {
+          row.querySelector(".history-stats").textContent += skippedText;
+        }
         historyList.appendChild(row);
       }
     }
@@ -544,69 +578,226 @@
       messageBox.textContent = "";
     }
 
-    async function processFiles() {
+    async function chooseFolder() {
       clearMessage();
-      if (pdfFiles.length === 0) {
-        showMessage("Add at least one PDF.", true);
+      chooseLocalFolder.disabled = true;
+      try {
+        const response = await fetch("/api/folder/select", { method: "POST" });
+        const payload = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload.error || `Folder selection failed with HTTP ${response.status}.`);
+        }
+        if (payload.cancelled) return;
+
+        localFolderPath = payload.path || "";
+        localFolderPreview = null;
+        localFolderName.textContent = localFolderPath || "No folder selected";
+        updatePreviewButton();
+        processLocalFolder.disabled = true;
+        renderFolderPreview(null);
+      } catch (error) {
+        showMessage(`Folder selection failed: ${error}`, true);
+      } finally {
+        chooseLocalFolder.disabled = false;
+      }
+    }
+
+    async function choosePdfs() {
+      clearMessage();
+      choosePdfFiles.disabled = true;
+      try {
+        const response = await fetch("/api/pdfs/select", { method: "POST" });
+        const payload = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload.error || `PDF selection failed with HTTP ${response.status}.`);
+        }
+        if (payload.cancelled) return;
+
+        addManualPdfPaths(payload.paths || []);
+        localFolderPreview = null;
+        updatePreviewButton();
+        processLocalFolder.disabled = true;
+        renderFolderPreview(null);
+      } catch (error) {
+        showMessage(`PDF selection failed: ${error}`, true);
+      } finally {
+        choosePdfFiles.disabled = false;
+      }
+    }
+
+    function addManualPdfPaths(paths) {
+      const seen = new Set(manualPdfPaths.map(path => path.toLowerCase()));
+      for (const path of paths) {
+        if (seen.has(String(path).toLowerCase())) continue;
+        manualPdfPaths.push(String(path));
+        seen.add(String(path).toLowerCase());
+      }
+      manualPdfName.textContent = manualPdfPaths.length
+        ? `${manualPdfPaths.length} individual PDF${manualPdfPaths.length === 1 ? "" : "s"} added`
+        : "No individual PDFs added";
+    }
+
+    function updatePreviewButton() {
+      previewLocalFolder.disabled = !localFolderPath && manualPdfPaths.length === 0;
+    }
+
+    async function previewFolder() {
+      clearMessage();
+      if (!localFolderPath && manualPdfPaths.length === 0) {
+        showMessage("Choose a local root folder or add PDF files first.", true);
         return;
       }
+
+      previewLocalFolder.disabled = true;
+      processLocalFolder.disabled = true;
+      beginProgress("Starting PDF preview. Python is listing folder entries; network or VPN folders can take time here.");
+      showMessage("Enumerating selected PDFs and applying filters.");
+      try {
+        const response = await fetch("/api/folder/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rootPath: localFolderPath, pdfPaths: manualPdfPaths, excludeTerms: excludeTerms.value }),
+        });
+        const payload = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload.error || `PDF preview failed with HTTP ${response.status}.`);
+        }
+
+        const preview = await waitForPreview(payload.previewJobId);
+        localFolderPreview = preview;
+        renderFolderPreview(preview);
+        processLocalFolder.disabled = Number(preview.includedCount || 0) === 0;
+        showMessage(`Preview ready. ${preview.includedCount || 0} PDF(s) selected, ${preview.skippedCount || 0} skipped.`);
+      } catch (error) {
+        localFolderPreview = null;
+        renderFolderPreview(null);
+        showMessage(`PDF preview failed: ${error}`, true);
+      } finally {
+        updatePreviewButton();
+      }
+    }
+
+    async function processFolderPreview() {
+      clearMessage();
       if (!numbersFile) {
         showMessage("Choose an Excel or CSV identifier file.", true);
         return;
       }
+      if (!localFolderPreview || !localFolderPreview.previewId) {
+        showMessage("Preview the selected PDFs first.", true);
+        return;
+      }
 
       const form = new FormData();
+      form.append("preview_id", localFolderPreview.previewId);
       form.append("mode", selectedMode());
-      for (const file of pdfFiles) {
-        form.append("pdf_files", file, file.webkitRelativePath || file.name);
-      }
       form.append("numbers_file", numbersFile, numbersFile.name);
 
-      processButton.disabled = true;
-      beginProgress("Copying input files to the local extractor. Shared-folder or VPN files are read during this step.");
-      showMessage("Processing locally. Keep this window open.");
+      processLocalFolder.disabled = true;
+      beginProgress("Copying identifier file to the local extractor. PDF files stay where they are and are read during extraction.");
+      showMessage("Processing selected PDFs. Keep this window open.");
       try {
-        const startPayload = await startExtractionJob(form);
+        const startPayload = await startExtractionJob(form, folderExtractionMessages());
         if (!startPayload.jobId) {
           throw new Error("The local extractor did not return a job id.");
         }
 
         const job = await waitForJob(startPayload.jobId);
-        const downloadResponse = await fetch(job.downloadUrl || `/api/jobs/${encodeURIComponent(job.jobId)}/download`);
-        if (!downloadResponse.ok) {
-          const payload = await readJsonResponse(downloadResponse);
-          throw new Error(payload.error || `Download failed with HTTP ${downloadResponse.status}.`);
-        }
-
-        const blob = await downloadResponse.blob();
-        const headerSummary = parseSummaryHeader(downloadResponse.headers.get("X-Extraction-Summary"));
-        const summary = job.summary || headerSummary;
-        const downloadName = summary.downloadName || `payslip-extractor-results-${Date.now()}.zip`;
-        downloadBlob(blob, downloadName);
-        saveHistory(summary);
-        updateLastRun(summary);
-        showMessage(`Done. Downloaded ${downloadName}.`);
+        await downloadFinishedJob(job);
       } catch (error) {
         showMessage(`Extraction failed: ${error}`, true);
         setProgressStatus("Failed");
       } finally {
-        processButton.disabled = false;
+        processLocalFolder.disabled = !localFolderPreview || Number(localFolderPreview.includedCount || 0) === 0;
       }
     }
 
-    function startExtractionJob(form) {
+    async function downloadFinishedJob(job) {
+      const downloadResponse = await fetch(job.downloadUrl || `/api/jobs/${encodeURIComponent(job.jobId)}/download`);
+      if (!downloadResponse.ok) {
+        const payload = await readJsonResponse(downloadResponse);
+        throw new Error(payload.error || `Download failed with HTTP ${downloadResponse.status}.`);
+      }
+
+      const blob = await downloadResponse.blob();
+      const headerSummary = parseSummaryHeader(downloadResponse.headers.get("X-Extraction-Summary"));
+      const summary = job.summary || headerSummary;
+      const downloadName = summary.downloadName || `payslip-extractor-results-${Date.now()}.zip`;
+      downloadBlob(blob, downloadName);
+      saveHistory(summary);
+      updateLastRun(summary);
+      showMessage(`Done. Downloaded ${downloadName}.`);
+    }
+
+    function folderExtractionMessages() {
+      return {
+        url: "/api/folder/start",
+        loadedText: "Identifier file copied. Preparing local extraction job.",
+        loadedStatus: "Preparing",
+        startedText: "Local extraction job started.",
+        progressStatus: "Copying",
+        progressText: (loaded, total, percent) =>
+          `Copying identifier file: ${formatBytes(loaded)} of ${formatBytes(total)} (${percent}%). PDFs stay in their selected locations.`,
+        indeterminateText: loaded =>
+          `Copying identifier file: ${formatBytes(loaded)} sent. PDFs stay in their selected locations.`,
+      };
+    }
+
+    function renderFolderPreview(preview) {
+      if (!preview) {
+        folderPreview.hidden = true;
+        previewTotal.textContent = "0";
+        previewIncluded.textContent = "0";
+        previewSkipped.textContent = "0";
+        includedSample.innerHTML = "";
+        skippedSample.innerHTML = "";
+        return;
+      }
+
+      folderPreview.hidden = false;
+      previewTotal.textContent = String(preview.totalPdfCount || 0);
+      previewIncluded.textContent = String(preview.includedCount || 0);
+      previewSkipped.textContent = String(preview.skippedCount || 0);
+      renderPathSample(includedSample, preview.includedSamples || [], "No selected PDFs", "[x]");
+      renderPathSample(skippedSample, preview.skippedSamples || [], "No skipped PDFs", "skip");
+    }
+
+    function renderPathSample(container, items, emptyText, marker) {
+      container.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = emptyText;
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "path-row";
+        const mark = document.createElement("span");
+        mark.className = "path-mark";
+        mark.textContent = marker;
+        const text = document.createElement("span");
+        text.textContent = item.reason ? `${item.path} - ${item.reason}` : item.path;
+        row.append(mark, text);
+        container.appendChild(row);
+      }
+    }
+
+    function startExtractionJob(form, messages) {
       return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
-        request.open("POST", "/api/extract");
+        request.open("POST", messages.url);
         request.responseType = "json";
 
         request.upload.addEventListener("progress", event => {
-          updateUploadProgress(event);
+          updateUploadProgress(event, messages);
         });
 
         request.upload.addEventListener("load", () => {
-          setUploadProgress("Inputs copied to the local extractor. Preparing extraction job.");
-          setProgressStatus("Preparing");
+          setUploadProgress(messages.loadedText);
+          setProgressStatus(messages.loadedStatus);
         });
 
         request.addEventListener("load", () => {
@@ -615,17 +806,17 @@
             reject(new Error(payload.error || `Extraction failed with HTTP ${request.status}.`));
             return;
           }
-          setUploadProgress("Local copies are ready. Extraction job started.");
+          setUploadProgress(messages.startedText);
           setProgressStatus("Queued");
           resolve(payload);
         });
 
         request.addEventListener("error", () => {
-          reject(new Error("Could not send files to the local extractor."));
+          reject(new Error("Could not send the identifier file to the local extractor."));
         });
 
         request.addEventListener("abort", () => {
-          reject(new Error("File copy was cancelled."));
+          reject(new Error("Identifier file copy was cancelled."));
         });
 
         request.send(form);
@@ -641,20 +832,16 @@
       }
     }
 
-    function updateUploadProgress(event) {
+    function updateUploadProgress(event, messages) {
       if (event.lengthComputable && event.total > 0) {
         const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
-        setProgressStatus(`Copying ${percent}%`);
-        setUploadProgress(
-          `Copying input files to the local extractor: ${formatBytes(event.loaded)} of ${formatBytes(event.total)} (${percent}%). Shared-folder or VPN files are read during this step.`
-        );
+        setProgressStatus(`${messages.progressStatus} ${percent}%`);
+        setUploadProgress(messages.progressText(event.loaded, event.total, percent));
         return;
       }
 
-      setProgressStatus("Copying");
-      setUploadProgress(
-        `Copying input files to the local extractor: ${formatBytes(event.loaded || 0)} sent. Shared-folder or VPN files are read during this step.`
-      );
+      setProgressStatus(messages.progressStatus);
+      setUploadProgress(messages.indeterminateText(event.loaded || 0));
     }
 
     async function waitForJob(jobId) {
@@ -669,6 +856,28 @@
         if (job.status === "done") return job;
         if (job.status === "error") {
           throw new Error(job.error || "Extraction failed.");
+        }
+
+        await delay(800);
+      }
+    }
+
+    async function waitForPreview(previewJobId) {
+      if (!previewJobId) {
+        throw new Error("The local extractor did not return a preview job id.");
+      }
+
+      while (true) {
+        const response = await fetch(`/api/previews/${encodeURIComponent(previewJobId)}`);
+        const job = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(job.error || `Could not read preview progress with HTTP ${response.status}.`);
+        }
+
+        renderProgress({ status: job.status, messages: job.messages || [] });
+        if (job.status === "done" && job.preview) return job.preview;
+        if (job.status === "error") {
+          throw new Error(job.error || "PDF preview failed.");
         }
 
         await delay(800);
@@ -825,31 +1034,9 @@
         .replace(/'/g, "&#039;");
     }
 
-    pdfInput.addEventListener("change", event => {
-      addFiles(event.target.files);
-      pdfInput.value = "";
-    });
-
-    folderInput.addEventListener("change", event => {
-      addFiles(event.target.files);
-      folderInput.value = "";
-    });
-
     numbersInput.addEventListener("change", event => {
       numbersFile = event.target.files[0] || null;
       numbersName.textContent = numbersFile ? `${numbersFile.name} (${formatBytes(numbersFile.size)})` : "No file selected";
-    });
-
-    document.getElementById("removeSelected").addEventListener("click", () => {
-      pdfFiles = pdfFiles.filter((_, index) => !selectedIndexes.has(index));
-      selectedIndexes.clear();
-      renderPdfList();
-    });
-
-    document.getElementById("clearPdfs").addEventListener("click", () => {
-      pdfFiles = [];
-      selectedIndexes.clear();
-      renderPdfList();
     });
 
     document.getElementById("clearHistory").addEventListener("click", () => {
@@ -857,8 +1044,17 @@
       renderHistory();
     });
 
-    processButton.addEventListener("click", processFiles);
-    renderPdfList();
+    chooseLocalFolder.addEventListener("click", chooseFolder);
+    choosePdfFiles.addEventListener("click", choosePdfs);
+    previewLocalFolder.addEventListener("click", previewFolder);
+    processLocalFolder.addEventListener("click", processFolderPreview);
+    excludeTerms.addEventListener("input", () => {
+      localFolderPreview = null;
+      processLocalFolder.disabled = true;
+      renderFolderPreview(null);
+    });
+
+    renderFolderPreview(null);
     renderHistory();
   </script>
 </body>

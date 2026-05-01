@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import io
 import json
 import re
@@ -34,19 +35,11 @@ def test_parse_multipart_upload_streams_fields_and_files(tmp_path) -> None:
     assert form.files["numbers_file"][0].path.read_text(encoding="utf-8") == "123\n"
 
 
-def test_web_extract_endpoint_returns_zip_and_summary(tmp_path) -> None:
+def test_web_manual_pdf_preview_returns_zip_and_summary(tmp_path) -> None:
     pdf_path = tmp_path / "payroll.pdf"
     _write_pdf(pdf_path, ["Employee 123 page", "Employee 456 page"])
     numbers_path = tmp_path / "numbers.csv"
     numbers_path.write_text("123\n", encoding="utf-8")
-
-    body, content_type = _multipart_body(
-        fields={"mode": "separate"},
-        files=[
-            ("pdf_files", "payroll.pdf", pdf_path.read_bytes()),
-            ("numbers_file", "numbers.csv", numbers_path.read_bytes()),
-        ],
-    )
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -54,19 +47,20 @@ def test_web_extract_endpoint_returns_zip_and_summary(tmp_path) -> None:
 
     try:
         host, port = server.server_address
-        request = urllib.request.Request(
-            f"http://{host}:{port}/api/extract",
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": content_type,
-                "Content-Length": str(len(body)),
-            },
-        )
         base_url = f"http://{host}:{port}"
-        with urllib.request.urlopen(request, timeout=30) as response:
-            assert response.status == 202
-            start_payload = json.loads(response.read().decode("utf-8"))
+        preview = _create_preview(
+            base_url,
+            {"rootPath": "", "pdfPaths": [str(pdf_path)], "excludeTerms": ""},
+        )
+
+        assert preview["totalPdfCount"] == 1
+        assert preview["includedCount"] == 1
+
+        body, content_type = _multipart_body(
+            fields={"preview_id": str(preview["previewId"]), "mode": "separate"},
+            files=[("numbers_file", "numbers.csv", numbers_path.read_bytes())],
+        )
+        start_payload = _start_folder_job(base_url, body, content_type)
 
         job = _wait_for_job(base_url, str(start_payload["jobId"]))
         with urllib.request.urlopen(f"{base_url}{job['downloadUrl']}", timeout=30) as response:
@@ -85,6 +79,7 @@ def test_web_extract_endpoint_returns_zip_and_summary(tmp_path) -> None:
     assert summary["matchedNumbersCount"] == 1
     assert summary["matchedPagesCount"] == 1
     assert summary["outputFilesCount"] == 1
+    assert summary["skippedPdfCount"] == 0
     assert download_summary["downloadName"] == summary["downloadName"]
     assert re.fullmatch(r"payslip-extractor-results-\d{8}-\d{6}\.zip", str(summary["downloadName"]))
     assert content_disposition == f'attachment; filename="{summary["downloadName"]}"'
@@ -94,6 +89,66 @@ def test_web_extract_endpoint_returns_zip_and_summary(tmp_path) -> None:
         names = set(archive.namelist())
 
     assert {"123.pdf", "audit.csv", "extraction.log"}.issubset(names)
+
+
+def test_web_folder_preview_and_extract_skips_explicitly_filtered_pdfs(tmp_path) -> None:
+    current = tmp_path / "current"
+    archive = tmp_path / "archive"
+    current.mkdir()
+    archive.mkdir()
+    _write_pdf(current / "payroll.pdf", ["Employee 123 page"])
+    _write_pdf(archive / "old.pdf", ["Employee 999 page"])
+    numbers_path = tmp_path / "numbers.csv"
+    numbers_path.write_text("123\n", encoding="utf-8")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+
+        preview = _create_preview(base_url, {"rootPath": str(tmp_path), "excludeTerms": "archive"})
+
+        assert preview["totalPdfCount"] == 2
+        assert preview["includedCount"] == 1
+        assert preview["skippedCount"] == 1
+        assert preview["includedSamples"] == [{"path": "current/payroll.pdf"}]
+        assert preview["skippedSamples"] == [
+            {"path": "archive/old.pdf", "reason": "Excluded by folder/name filter: archive"}
+        ]
+
+        body, content_type = _multipart_body(
+            fields={"preview_id": str(preview["previewId"]), "mode": "separate"},
+            files=[("numbers_file", "numbers.csv", numbers_path.read_bytes())],
+        )
+        start_payload = _start_folder_job(base_url, body, content_type)
+
+        job = _wait_for_job(base_url, str(start_payload["jobId"]))
+        with urllib.request.urlopen(f"{base_url}{job['downloadUrl']}", timeout=30) as response:
+            response_body = response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    summary = job["summary"]
+    assert summary["pdfCount"] == 1
+    assert summary["skippedPdfCount"] == 1
+    assert summary["matchedNumbersCount"] == 1
+
+    with zipfile.ZipFile(io.BytesIO(response_body)) as archive_file:
+        names = set(archive_file.namelist())
+        audit_rows = list(
+            csv.DictReader(io.StringIO(archive_file.read("audit.csv").decode("utf-8-sig")))
+        )
+
+    assert {"123.pdf", "audit.csv", "extraction.log"}.issubset(names)
+    assert any(
+        row["status"] == "skipped" and "archive/old.pdf" in row["source_pdf"].replace("\\", "/")
+        for row in audit_rows
+    )
 
 
 def test_bind_web_server_falls_back_when_port_is_busy() -> None:
@@ -147,6 +202,51 @@ def _multipart_body(
 def _decode_summary(value: str) -> dict[str, object]:
     padded = value + "=" * ((4 - len(value) % 4) % 4)
     return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+
+
+def _create_preview(base_url: str, payload: dict[str, object]) -> dict[str, object]:
+    preview_request = urllib.request.Request(
+        f"{base_url}/api/folder/preview",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(preview_request, timeout=30) as response:
+        assert response.status == 202
+        start_payload = json.loads(response.read().decode("utf-8"))
+
+    preview_job = _wait_for_preview(base_url, str(start_payload["previewJobId"]))
+    return preview_job["preview"]  # type: ignore[return-value]
+
+
+def _start_folder_job(base_url: str, body: bytes, content_type: str) -> dict[str, object]:
+    start_request = urllib.request.Request(
+        f"{base_url}/api/folder/start",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": content_type,
+            "Content-Length": str(len(body)),
+        },
+    )
+    with urllib.request.urlopen(start_request, timeout=30) as response:
+        assert response.status == 202
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _wait_for_preview(base_url: str, preview_job_id: str) -> dict[str, object]:
+    deadline = time.monotonic() + 30
+    last_payload: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        with urllib.request.urlopen(f"{base_url}/api/previews/{preview_job_id}", timeout=10) as response:
+            last_payload = json.loads(response.read().decode("utf-8"))
+
+        if last_payload.get("status") in {"done", "error"}:
+            return last_payload
+
+        time.sleep(0.1)
+
+    raise AssertionError(f"Timed out waiting for folder preview: {last_payload}")
 
 
 def _wait_for_job(base_url: str, job_id: str) -> dict[str, object]:
