@@ -151,6 +151,45 @@ def test_web_folder_preview_and_extract_skips_explicitly_filtered_pdfs(tmp_path)
     )
 
 
+def test_web_folder_preview_uses_include_folder_terms(tmp_path) -> None:
+    included_folder = tmp_path / "BULLETINS DE PAIE 08-2026"
+    skipped_folder = tmp_path / "contracts"
+    included_folder.mkdir()
+    skipped_folder.mkdir()
+    _write_pdf(included_folder / "payroll.pdf", ["Employee 123 page"])
+    _write_pdf(skipped_folder / "contract.pdf", ["Employee 456 page"])
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+
+        preview = _create_preview(
+            base_url,
+            {
+                "rootPath": str(tmp_path),
+                "includeFolderTerms": "bulletin de paei",
+                "excludeTerms": "",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert preview["includeFolderTerms"] == ["bulletin de paei"]
+    assert preview["totalPdfCount"] == 2
+    assert preview["includedCount"] == 1
+    assert preview["skippedCount"] == 1
+    assert preview["includedSamples"] == [{"path": "BULLETINS DE PAIE 08-2026/payroll.pdf"}]
+    assert preview["skippedSamples"] == [
+        {"path": "contracts/contract.pdf", "reason": "Folder did not match include filter: bulletin de paei"}
+    ]
+
+
 def test_bind_web_server_falls_back_when_port_is_busy() -> None:
     first = bind_web_server("127.0.0.1", 0)
     host, port = first.server_address

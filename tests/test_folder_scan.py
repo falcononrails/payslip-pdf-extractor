@@ -49,6 +49,55 @@ def test_scan_pdf_sources_accepts_individual_pdfs_without_root_folder(tmp_path) 
     ]
 
 
+def test_scan_pdf_sources_includes_only_fuzzy_matching_folder_names(tmp_path) -> None:
+    folder_names = [
+        "BULLETINS DE PAIE",
+        "BULLETIN DE PAIE",
+        "BULLETIN   DE PAIE",
+        "BULLETINS DE PAIE 082026",
+        "BULLETIN DE PAIE 08 2026",
+        "BULLETINS DE PAIE 08-2026",
+    ]
+    for index, folder_name in enumerate(folder_names, start=1):
+        folder = tmp_path / folder_name
+        folder.mkdir()
+        (folder / f"{index}.pdf").write_text("x", encoding="utf-8")
+
+    other = tmp_path / "archives"
+    other.mkdir()
+    (other / "old.pdf").write_text("x", encoding="utf-8")
+
+    result = scan_pdf_sources(tmp_path, (), "", include_folder_terms="bulletins de paie")
+
+    assert [item.relative_path for item in result.included] == [
+        "BULLETIN   DE PAIE/3.pdf",
+        "BULLETIN DE PAIE 08 2026/5.pdf",
+        "BULLETIN DE PAIE/2.pdf",
+        "BULLETINS DE PAIE 08-2026/6.pdf",
+        "BULLETINS DE PAIE 082026/4.pdf",
+        "BULLETINS DE PAIE/1.pdf",
+    ]
+    assert [(item.relative_path, item.reason) for item in result.skipped] == [
+        ("archives/old.pdf", "Folder did not match include filter: bulletins de paie")
+    ]
+
+
+def test_scan_pdf_sources_folder_include_tolerates_typos_and_case(tmp_path) -> None:
+    folder = tmp_path / "BULLETINS DE PAIE"
+    folder.mkdir()
+    (folder / "match.pdf").write_text("x", encoding="utf-8")
+    other = tmp_path / "contracts"
+    other.mkdir()
+    (other / "skip.pdf").write_text("x", encoding="utf-8")
+
+    result = scan_pdf_sources(tmp_path, (), "", include_folder_terms="bulletin de paei")
+
+    assert [item.relative_path for item in result.included] == ["BULLETINS DE PAIE/match.pdf"]
+    assert [(item.relative_path, item.reason) for item in result.skipped] == [
+        ("contracts/skip.pdf", "Folder did not match include filter: bulletin de paei")
+    ]
+
+
 def test_scan_pdf_sources_reports_folder_walk_progress(tmp_path) -> None:
     nested = tmp_path / "network" / "legacy"
     nested.mkdir(parents=True)

@@ -75,6 +75,7 @@ class FolderPreviewJob:
     root_path: str
     pdf_paths: tuple[str, ...]
     exclude_terms: str | list[str]
+    include_folder_terms: str | list[str]
     status: str = "queued"
     messages: list[dict[str, str]] = field(default_factory=list)
     preview: FolderPreview | None = None
@@ -305,12 +306,14 @@ class WebHandler(BaseHTTPRequestHandler):
         if not root_path and not pdf_paths:
             raise UserFacingWebError("Choose a root folder or add PDF files first.")
         exclude_terms = payload.get("excludeTerms", "")
+        include_folder_terms = payload.get("includeFolderTerms", "")
 
         job = FolderPreviewJob(
             id=uuid.uuid4().hex,
             root_path=root_path,
             pdf_paths=tuple(pdf_paths),
             exclude_terms=exclude_terms,  # type: ignore[arg-type]
+            include_folder_terms=include_folder_terms,  # type: ignore[arg-type]
         )
         job.append_message("Preview requested.")
         register_folder_preview_job(job)
@@ -569,6 +572,7 @@ def folder_preview_payload(preview_id: str, scan: FolderScanResult) -> dict[str,
         "previewId": preview_id,
         "rootPath": str(scan.root_path) if scan.root_path is not None else "",
         "excludeTerms": list(scan.exclude_terms),
+        "includeFolderTerms": list(scan.include_folder_terms),
         "totalPdfCount": scan.total_pdf_count,
         "includedCount": len(scan.included),
         "skippedCount": len(scan.skipped),
@@ -592,6 +596,8 @@ def run_folder_preview_job(job: FolderPreviewJob) -> None:
             job.append_message("Python is listing folder entries now; PDF contents are not copied during preview.")
         else:
             job.append_message("No folder tree to walk; checking the selected PDF path(s).")
+        if job.include_folder_terms:
+            job.append_message(f"Folder include filter active: {job.include_folder_terms}")
         if job.pdf_paths:
             job.append_message(f"Adding {len(job.pdf_paths)} manually selected PDF file(s).")
 
@@ -599,6 +605,7 @@ def run_folder_preview_job(job: FolderPreviewJob) -> None:
             root_path=job.root_path or None,
             pdf_paths=job.pdf_paths,
             exclude_terms=job.exclude_terms,
+            include_folder_terms=job.include_folder_terms,
             progress_callback=job.append_message,
         )
         job.append_message(

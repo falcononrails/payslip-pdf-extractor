@@ -410,6 +410,9 @@
         <div class="file-meta" id="localFolderName" style="margin-top: 10px;">No folder selected</div>
         <div class="file-meta" id="manualPdfName" style="margin-top: 4px;">No individual PDFs added</div>
 
+        <label for="includeFolderTerms">Only include folder names</label>
+        <input id="includeFolderTerms" type="text" placeholder="bulletin de paie, payslip, payroll">
+
         <label for="excludeTerms">Exclude folder/name terms</label>
         <input id="excludeTerms" type="text" placeholder="archive, backup, old, temp">
 
@@ -497,6 +500,7 @@
     const processLocalFolder = document.getElementById("processLocalFolder");
     const localFolderName = document.getElementById("localFolderName");
     const manualPdfName = document.getElementById("manualPdfName");
+    const includeFolderTerms = document.getElementById("includeFolderTerms");
     const excludeTerms = document.getElementById("excludeTerms");
     const folderPreview = document.getElementById("folderPreview");
     const previewTotal = document.getElementById("previewTotal");
@@ -656,7 +660,12 @@
         const response = await fetch("/api/folder/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rootPath: localFolderPath, pdfPaths: manualPdfPaths, excludeTerms: excludeTerms.value }),
+          body: JSON.stringify({
+            rootPath: localFolderPath,
+            pdfPaths: manualPdfPaths,
+            includeFolderTerms: includeFolderTerms.value,
+            excludeTerms: excludeTerms.value,
+          }),
         });
         const payload = await readJsonResponse(response);
         if (!response.ok) {
@@ -1048,11 +1057,14 @@
     choosePdfFiles.addEventListener("click", choosePdfs);
     previewLocalFolder.addEventListener("click", previewFolder);
     processLocalFolder.addEventListener("click", processFolderPreview);
-    excludeTerms.addEventListener("input", () => {
+    function invalidatePreview() {
       localFolderPreview = null;
       processLocalFolder.disabled = true;
       renderFolderPreview(null);
-    });
+    }
+
+    includeFolderTerms.addEventListener("input", invalidatePreview);
+    excludeTerms.addEventListener("input", invalidatePreview);
 
     renderFolderPreview(null);
     renderHistory();
