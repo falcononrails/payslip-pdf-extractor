@@ -3,15 +3,18 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import threading
+import time
 import urllib.request
 import zipfile
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from reportlab.pdfgen import canvas
 
-from payslip_extractor.web import WebHandler, bind_web_server, parse_multipart_upload
+from payslip_extractor.web import WebHandler, bind_web_server, build_results_zip_name, parse_multipart_upload
 
 
 def test_parse_multipart_upload_streams_fields_and_files(tmp_path) -> None:
@@ -60,9 +63,17 @@ def test_web_extract_endpoint_returns_zip_and_summary(tmp_path) -> None:
                 "Content-Length": str(len(body)),
             },
         )
+        base_url = f"http://{host}:{port}"
         with urllib.request.urlopen(request, timeout=30) as response:
+            assert response.status == 202
+            start_payload = json.loads(response.read().decode("utf-8"))
+
+        job = _wait_for_job(base_url, str(start_payload["jobId"]))
+        with urllib.request.urlopen(f"{base_url}{job['downloadUrl']}", timeout=30) as response:
             response_body = response.read()
-            summary = _decode_summary(response.headers["X-Extraction-Summary"])
+            summary = job["summary"]
+            download_summary = _decode_summary(response.headers["X-Extraction-Summary"])
+            content_disposition = response.headers["Content-Disposition"]
     finally:
         server.shutdown()
         server.server_close()
@@ -74,6 +85,10 @@ def test_web_extract_endpoint_returns_zip_and_summary(tmp_path) -> None:
     assert summary["matchedNumbersCount"] == 1
     assert summary["matchedPagesCount"] == 1
     assert summary["outputFilesCount"] == 1
+    assert download_summary["downloadName"] == summary["downloadName"]
+    assert re.fullmatch(r"payslip-extractor-results-\d{8}-\d{6}\.zip", str(summary["downloadName"]))
+    assert content_disposition == f'attachment; filename="{summary["downloadName"]}"'
+    assert any("Loading identifiers" in message["text"] for message in job["messages"])
 
     with zipfile.ZipFile(io.BytesIO(response_body)) as archive:
         names = set(archive.namelist())
@@ -93,6 +108,12 @@ def test_bind_web_server_falls_back_when_port_is_busy() -> None:
             second.server_close()
     finally:
         first.server_close()
+
+
+def test_build_results_zip_name_uses_windows_safe_timestamp() -> None:
+    assert build_results_zip_name(datetime(2026, 5, 1, 22, 30, 45)) == (
+        "payslip-extractor-results-20260501-223045.zip"
+    )
 
 
 def _multipart_body(
@@ -126,6 +147,21 @@ def _multipart_body(
 def _decode_summary(value: str) -> dict[str, object]:
     padded = value + "=" * ((4 - len(value) % 4) % 4)
     return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+
+
+def _wait_for_job(base_url: str, job_id: str) -> dict[str, object]:
+    deadline = time.monotonic() + 30
+    last_payload: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        with urllib.request.urlopen(f"{base_url}/api/jobs/{job_id}", timeout=10) as response:
+            last_payload = json.loads(response.read().decode("utf-8"))
+
+        if last_payload.get("status") in {"done", "error"}:
+            return last_payload
+
+        time.sleep(0.1)
+
+    raise AssertionError(f"Timed out waiting for extraction job: {last_payload}")
 
 
 def _write_pdf(path: Path, page_texts: list[str]) -> None:

@@ -122,6 +122,10 @@
       border-color: #a9b4bc;
     }
 
+    label.file-button {
+      margin: 0;
+    }
+
     button.primary {
       background: var(--accent);
       border-color: var(--accent);
@@ -257,6 +261,42 @@
       color: var(--danger);
     }
 
+    .progress-log {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfcfd;
+      max-height: 260px;
+      overflow: auto;
+    }
+
+    .log-line {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .log-line:last-child {
+      border-bottom: 0;
+    }
+
+    .log-time {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .log-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .log-line.error .log-text {
+      color: var(--danger);
+      font-weight: 600;
+    }
+
     .history-list {
       display: grid;
       gap: 10px;
@@ -344,6 +384,14 @@
         <div id="messageBox" class="message" hidden></div>
       </section>
 
+      <section style="margin-top: 16px;" id="progressSection" hidden>
+        <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
+          <h2 style="margin: 0;">Progress</h2>
+          <span class="status-pill" id="progressStatus">Ready</span>
+        </div>
+        <div class="progress-log" id="progressLog"></div>
+      </section>
+
       <section style="margin-top: 16px;" id="lastRunSection" hidden>
         <h2>Last run</h2>
         <div class="summary">
@@ -375,6 +423,9 @@
     const processButton = document.getElementById("processButton");
     const messageBox = document.getElementById("messageBox");
     const historyList = document.getElementById("historyList");
+    const progressSection = document.getElementById("progressSection");
+    const progressStatus = document.getElementById("progressStatus");
+    const progressLog = document.getElementById("progressLog");
     const lastRunSection = document.getElementById("lastRunSection");
     const lastMatchedIds = document.getElementById("lastMatchedIds");
     const lastPages = document.getElementById("lastPages");
@@ -384,6 +435,7 @@
     let pdfFiles = [];
     let selectedIndexes = new Set();
     let numbersFile = null;
+    let uploadProgressLine = null;
 
     function fileKey(file) {
       return [file.name, file.size, file.lastModified, file.webkitRelativePath || ""].join(":");
@@ -511,21 +563,24 @@
       form.append("numbers_file", numbersFile, numbersFile.name);
 
       processButton.disabled = true;
+      beginProgress("Copying input files to the local extractor. Shared-folder or VPN files are read during this step.");
       showMessage("Processing locally. Keep this window open.");
       try {
-        const response = await fetch("/api/extract", { method: "POST", body: form });
-        if (!response.ok) {
-          let errorText = `Extraction failed with HTTP ${response.status}.`;
-          try {
-            const payload = await response.json();
-            if (payload.error) errorText = payload.error;
-          } catch {}
-          showMessage(errorText, true);
-          return;
+        const startPayload = await startExtractionJob(form);
+        if (!startPayload.jobId) {
+          throw new Error("The local extractor did not return a job id.");
         }
 
-        const blob = await response.blob();
-        const summary = parseSummaryHeader(response.headers.get("X-Extraction-Summary"));
+        const job = await waitForJob(startPayload.jobId);
+        const downloadResponse = await fetch(job.downloadUrl || `/api/jobs/${encodeURIComponent(job.jobId)}/download`);
+        if (!downloadResponse.ok) {
+          const payload = await readJsonResponse(downloadResponse);
+          throw new Error(payload.error || `Download failed with HTTP ${downloadResponse.status}.`);
+        }
+
+        const blob = await downloadResponse.blob();
+        const headerSummary = parseSummaryHeader(downloadResponse.headers.get("X-Extraction-Summary"));
+        const summary = job.summary || headerSummary;
         const downloadName = summary.downloadName || `payslip-extractor-results-${Date.now()}.zip`;
         downloadBlob(blob, downloadName);
         saveHistory(summary);
@@ -533,9 +588,169 @@
         showMessage(`Done. Downloaded ${downloadName}.`);
       } catch (error) {
         showMessage(`Extraction failed: ${error}`, true);
+        setProgressStatus("Failed");
       } finally {
         processButton.disabled = false;
       }
+    }
+
+    function startExtractionJob(form) {
+      return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open("POST", "/api/extract");
+        request.responseType = "json";
+
+        request.upload.addEventListener("progress", event => {
+          updateUploadProgress(event);
+        });
+
+        request.upload.addEventListener("load", () => {
+          setUploadProgress("Inputs copied to the local extractor. Preparing extraction job.");
+          setProgressStatus("Preparing");
+        });
+
+        request.addEventListener("load", () => {
+          const payload = readXhrJson(request);
+          if (request.status < 200 || request.status >= 300) {
+            reject(new Error(payload.error || `Extraction failed with HTTP ${request.status}.`));
+            return;
+          }
+          setUploadProgress("Local copies are ready. Extraction job started.");
+          setProgressStatus("Queued");
+          resolve(payload);
+        });
+
+        request.addEventListener("error", () => {
+          reject(new Error("Could not send files to the local extractor."));
+        });
+
+        request.addEventListener("abort", () => {
+          reject(new Error("File copy was cancelled."));
+        });
+
+        request.send(form);
+      });
+    }
+
+    function readXhrJson(request) {
+      if (request.response && typeof request.response === "object") return request.response;
+      try {
+        return JSON.parse(request.responseText || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function updateUploadProgress(event) {
+      if (event.lengthComputable && event.total > 0) {
+        const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        setProgressStatus(`Copying ${percent}%`);
+        setUploadProgress(
+          `Copying input files to the local extractor: ${formatBytes(event.loaded)} of ${formatBytes(event.total)} (${percent}%). Shared-folder or VPN files are read during this step.`
+        );
+        return;
+      }
+
+      setProgressStatus("Copying");
+      setUploadProgress(
+        `Copying input files to the local extractor: ${formatBytes(event.loaded || 0)} sent. Shared-folder or VPN files are read during this step.`
+      );
+    }
+
+    async function waitForJob(jobId) {
+      while (true) {
+        const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+        const job = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(job.error || `Could not read progress with HTTP ${response.status}.`);
+        }
+
+        renderProgress(job);
+        if (job.status === "done") return job;
+        if (job.status === "error") {
+          throw new Error(job.error || "Extraction failed.");
+        }
+
+        await delay(800);
+      }
+    }
+
+    async function readJsonResponse(response) {
+      try {
+        return await response.json();
+      } catch {
+        return {};
+      }
+    }
+
+    function delay(milliseconds) {
+      return new Promise(resolve => setTimeout(resolve, milliseconds));
+    }
+
+    function beginProgress(text) {
+      progressSection.hidden = false;
+      progressLog.innerHTML = "";
+      uploadProgressLine = null;
+      setProgressStatus("Starting");
+      uploadProgressLine = appendProgressLine({ time: formatClock(new Date()), level: "info", text });
+    }
+
+    function renderProgress(job) {
+      progressSection.hidden = false;
+      setProgressStatus(formatJobStatus(job.status));
+      progressLog.innerHTML = "";
+      uploadProgressLine = null;
+
+      const messages = Array.isArray(job.messages) ? job.messages : [];
+      if (messages.length === 0) {
+        appendProgressLine({ time: formatClock(new Date()), level: "info", text: "Waiting for extraction to start." });
+      } else {
+        for (const message of messages) appendProgressLine(message);
+      }
+      progressLog.scrollTop = progressLog.scrollHeight;
+    }
+
+    function setUploadProgress(text) {
+      if (!uploadProgressLine) {
+        uploadProgressLine = appendProgressLine({ time: formatClock(new Date()), level: "info", text });
+      } else {
+        uploadProgressLine.time.textContent = formatClock(new Date());
+        uploadProgressLine.text.textContent = text;
+      }
+      progressLog.scrollTop = progressLog.scrollHeight;
+    }
+
+    function appendProgressLine(message) {
+      const row = document.createElement("div");
+      row.className = `log-line ${message.level === "error" ? "error" : ""}`;
+
+      const time = document.createElement("span");
+      time.className = "log-time";
+      time.textContent = message.time || "";
+
+      const text = document.createElement("span");
+      text.className = "log-text";
+      text.textContent = message.text || "";
+
+      row.append(time, text);
+      progressLog.appendChild(row);
+      return { row, time, text };
+    }
+
+    function setProgressStatus(text) {
+      progressStatus.textContent = text;
+    }
+
+    function formatJobStatus(status) {
+      if (status === "queued") return "Queued";
+      if (status === "running") return "Running";
+      if (status === "done") return "Ready";
+      if (status === "error") return "Failed";
+      return "Working";
+    }
+
+    function formatClock(date) {
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
     }
 
     function parseSummaryHeader(value) {

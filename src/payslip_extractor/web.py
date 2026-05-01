@@ -10,10 +10,12 @@ import socket
 import tempfile
 import threading
 import time
+import uuid
 import webbrowser
 import zipfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
@@ -28,6 +30,10 @@ from payslip_extractor.numbers import NumberFileError
 logger = logging.getLogger("payslip_extractor")
 READ_CHUNK_SIZE = 1024 * 1024
 DEFAULT_WEB_PORT = 8765
+MAX_JOB_MESSAGES = 300
+JOB_RETENTION_SECONDS = 60 * 60
+JOBS: dict[str, "ExtractionJob"] = {}
+JOBS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,70 @@ class UploadedFile:
 class MultipartForm:
     fields: dict[str, list[str]]
     files: dict[str, list[UploadedFile]]
+
+
+@dataclass
+class ExtractionJob:
+    id: str
+    workspace: Path
+    pdf_paths: tuple[Path, ...]
+    numbers_file: Path
+    mode: str
+    status: str = "queued"
+    messages: list[dict[str, str]] = field(default_factory=list)
+    summary_payload: dict[str, object] | None = None
+    zip_path: Path | None = None
+    error: str | None = None
+    completed_monotonic: float | None = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def append_message(self, text: str, level: str = "info") -> None:
+        with self._lock:
+            self.messages.append(
+                {
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "level": level,
+                    "text": text,
+                }
+            )
+            if len(self.messages) > MAX_JOB_MESSAGES:
+                del self.messages[: len(self.messages) - MAX_JOB_MESSAGES]
+
+    def set_status(self, status: str) -> None:
+        with self._lock:
+            self.status = status
+
+    def mark_done(self, summary_payload: dict[str, object], zip_path: Path) -> None:
+        with self._lock:
+            self.status = "done"
+            self.summary_payload = summary_payload
+            self.zip_path = zip_path
+            self.completed_monotonic = time.monotonic()
+
+    def mark_error(self, error: str) -> None:
+        with self._lock:
+            self.status = "error"
+            self.error = error
+            self.completed_monotonic = time.monotonic()
+
+    def snapshot(self) -> dict[str, object]:
+        with self._lock:
+            payload: dict[str, object] = {
+                "jobId": self.id,
+                "status": self.status,
+                "messages": list(self.messages),
+            }
+            if self.error:
+                payload["error"] = self.error
+            if self.summary_payload:
+                payload["summary"] = dict(self.summary_payload)
+                payload["downloadName"] = self.summary_payload.get("downloadName", "")
+                payload["downloadUrl"] = f"/api/jobs/{self.id}/download"
+            return payload
+
+    def is_expired(self, now: float) -> bool:
+        with self._lock:
+            return self.completed_monotonic is not None and now - self.completed_monotonic > JOB_RETENTION_SECONDS
 
 
 class LocalWebServer(ThreadingHTTPServer):
@@ -100,6 +170,9 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json({"ok": True, "version": __version__})
             return
+        if path.startswith("/api/jobs/"):
+            self._handle_job_request(path)
+            return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
@@ -110,7 +183,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            self._handle_extract()
+            self._start_extract_job()
         except UserFacingWebError as exc:
             self._send_json({"error": str(exc)}, status=exc.status)
         except Exception as exc:
@@ -126,7 +199,7 @@ class WebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _handle_extract(self) -> None:
+    def _start_extract_job(self) -> None:
         content_length = int(self.headers.get("Content-Length", "0") or "0")
         if content_length <= 0:
             raise UserFacingWebError("No upload body received.")
@@ -146,47 +219,57 @@ class WebHandler(BaseHTTPRequestHandler):
             if not number_files:
                 raise UserFacingWebError("Select an Excel or CSV identifier file.")
 
-            output_dir = workspace / "output"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            log_file = output_dir / "extraction.log"
+            job = ExtractionJob(
+                id=uuid.uuid4().hex,
+                workspace=workspace,
+                pdf_paths=tuple(upload.path for upload in pdf_files),
+                numbers_file=number_files[0].path,
+                mode=mode,
+            )
+            job.append_message("Upload received. Preparing extraction.")
+            register_job(job)
+            thread = threading.Thread(target=run_extraction_job, args=(job,), daemon=True)
+            thread.start()
 
-            file_handler = logging.FileHandler(log_file, encoding="utf-8", mode="w")
-            file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
-            logger.addHandler(file_handler)
-            logger.setLevel(logging.INFO)
-
-            start = time.monotonic()
-            try:
-                summary = run_extraction(
-                    pdf_paths=[upload.path for upload in pdf_files],
-                    numbers_file=number_files[0].path,
-                    output_dir=output_dir,
-                    mode=mode,  # type: ignore[arg-type]
-                )
-            except (ExtractionError, NumberFileError) as exc:
-                raise UserFacingWebError(str(exc)) from exc
-            finally:
-                logger.removeHandler(file_handler)
-                file_handler.close()
-
-            duration_seconds = round(time.monotonic() - start, 2)
-            zip_path = workspace / "payslip-extractor-results.zip"
-            create_results_zip(zip_path, output_dir)
-            summary_payload = {
-                "mode": mode,
-                "pdfCount": len(pdf_files),
-                "numbersCount": summary.numbers_count,
-                "matchedNumbersCount": summary.matched_numbers_count,
-                "matchedPagesCount": summary.matched_pages_count,
-                "outputFilesCount": len(summary.output_files),
-                "outputFileNames": [path.name for path in summary.output_files],
-                "durationSeconds": duration_seconds,
-                "downloadName": zip_path.name,
-                "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            }
-            self._send_file(zip_path, "application/zip", zip_path.name, summary_payload)
+            self._send_json(
+                {
+                    "jobId": job.id,
+                    "status": job.status,
+                    "statusUrl": f"/api/jobs/{job.id}",
+                },
+                status=HTTPStatus.ACCEPTED,
+            )
+            workspace = None
         finally:
-            shutil.rmtree(workspace, ignore_errors=True)
+            if workspace is not None:
+                shutil.rmtree(workspace, ignore_errors=True)
+
+    def _handle_job_request(self, path: str) -> None:
+        match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})(/download)?", path)
+        if not match:
+            self._send_json({"error": "Job not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        job = get_job(match.group(1))
+        if job is None:
+            self._send_json({"error": "Job not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        if not match.group(2):
+            self._send_json(job.snapshot())
+            return
+
+        with job._lock:
+            status = job.status
+            zip_path = job.zip_path
+            summary_payload = dict(job.summary_payload or {})
+
+        if status != "done" or zip_path is None:
+            self._send_json({"error": "Extraction is not ready for download."}, status=HTTPStatus.CONFLICT)
+            return
+
+        download_name = str(summary_payload.get("downloadName") or zip_path.name)
+        self._send_file(zip_path, "application/zip", download_name, summary_payload)
 
     def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -219,6 +302,113 @@ class UserFacingWebError(RuntimeError):
     def __init__(self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
         super().__init__(message)
         self.status = status
+
+
+class ThreadLogFilter(logging.Filter):
+    def __init__(self, thread_id: int) -> None:
+        super().__init__()
+        self.thread_id = thread_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.thread == self.thread_id
+
+
+class JobLogHandler(logging.Handler):
+    def __init__(self, job: ExtractionJob) -> None:
+        super().__init__(logging.INFO)
+        self.job = job
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.job.append_message(self.format(record), record.levelname.lower())
+        except Exception:
+            self.handleError(record)
+
+
+def register_job(job: ExtractionJob) -> None:
+    cleanup_finished_jobs()
+    with JOBS_LOCK:
+        JOBS[job.id] = job
+
+
+def get_job(job_id: str) -> ExtractionJob | None:
+    cleanup_finished_jobs()
+    with JOBS_LOCK:
+        return JOBS.get(job_id)
+
+
+def cleanup_finished_jobs() -> None:
+    now = time.monotonic()
+    expired_jobs: list[ExtractionJob] = []
+    with JOBS_LOCK:
+        for job_id, job in list(JOBS.items()):
+            if job.is_expired(now):
+                expired_jobs.append(job)
+                del JOBS[job_id]
+
+    for job in expired_jobs:
+        shutil.rmtree(job.workspace, ignore_errors=True)
+
+
+def run_extraction_job(job: ExtractionJob) -> None:
+    job.set_status("running")
+    output_dir = job.workspace / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    log_file = output_dir / "extraction.log"
+
+    thread_filter = ThreadLogFilter(threading.get_ident())
+    formatter = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
+    file_handler = logging.FileHandler(log_file, encoding="utf-8", mode="w")
+    file_handler.setFormatter(formatter)
+    file_handler.addFilter(thread_filter)
+    job_handler = JobLogHandler(job)
+    job_handler.setFormatter(formatter)
+    job_handler.addFilter(thread_filter)
+
+    logger.addHandler(file_handler)
+    logger.addHandler(job_handler)
+    logger.setLevel(logging.INFO)
+
+    start = time.monotonic()
+    try:
+        logger.info("Starting extraction job.")
+        summary = run_extraction(
+            pdf_paths=job.pdf_paths,
+            numbers_file=job.numbers_file,
+            output_dir=output_dir,
+            mode=job.mode,  # type: ignore[arg-type]
+        )
+
+        duration_seconds = round(time.monotonic() - start, 2)
+        created_at = datetime.now().astimezone()
+        zip_path = job.workspace / build_results_zip_name(created_at)
+        logger.info("Packaging results into %s...", zip_path.name)
+        create_results_zip(zip_path, output_dir)
+        summary_payload = {
+            "mode": job.mode,
+            "pdfCount": len(job.pdf_paths),
+            "numbersCount": summary.numbers_count,
+            "matchedNumbersCount": summary.matched_numbers_count,
+            "matchedPagesCount": summary.matched_pages_count,
+            "outputFilesCount": len(summary.output_files),
+            "outputFileNames": [path.name for path in summary.output_files],
+            "durationSeconds": duration_seconds,
+            "downloadName": zip_path.name,
+            "createdAt": created_at.isoformat(timespec="seconds"),
+        }
+        logger.info("Download ready.")
+        job.mark_done(summary_payload, zip_path)
+    except (ExtractionError, NumberFileError) as exc:
+        job.append_message(str(exc), "error")
+        job.mark_error(str(exc))
+    except Exception as exc:
+        logger.exception("Unexpected web extraction failure")
+        job.mark_error(f"Unexpected error: {exc}")
+    finally:
+        logger.removeHandler(file_handler)
+        logger.removeHandler(job_handler)
+        file_handler.close()
+        job_handler.close()
 
 
 def parse_multipart_upload(
@@ -406,6 +596,11 @@ def first_form_value(fields: dict[str, list[str]], name: str, default: str) -> s
     if not values:
         return default
     return values[0]
+
+
+def build_results_zip_name(created_at: datetime | None = None) -> str:
+    timestamp = (created_at or datetime.now().astimezone()).strftime("%Y%m%d-%H%M%S")
+    return f"payslip-extractor-results-{timestamp}.zip"
 
 
 def create_results_zip(zip_path: Path, output_dir: Path) -> None:

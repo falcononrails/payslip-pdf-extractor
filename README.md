@@ -27,9 +27,10 @@ Double-clicking the executable opens a local browser UI. The files stay on the u
 1. Add PDF files. Use `Add PDFs...` multiple times when files are in different folders, or `Add folder...` for one folder.
 2. Select the Excel or CSV file containing identifiers.
 3. Choose one merged PDF or one PDF per number.
-4. Process and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
+4. Process the files, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
 
 The browser UI keeps local run history with summary stats in browser localStorage. The history is stored only on that computer.
+The progress panel first shows the copy/upload phase into the local extractor; if the selected files live on a shared folder or VPN path, that is when they are read from the network location.
 
 ## CLI Usage
 
