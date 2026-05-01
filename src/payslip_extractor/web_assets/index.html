@@ -316,7 +316,7 @@
 
     .path-columns {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       gap: 12px;
       margin-top: 12px;
     }
@@ -332,21 +332,38 @@
     .path-row {
       border-bottom: 1px solid var(--line);
       display: grid;
-      grid-template-columns: 32px minmax(0, 1fr);
+      grid-template-columns: 24px minmax(0, 1fr);
       gap: 8px;
+      align-items: center;
       overflow-wrap: anywhere;
       padding: 8px 10px;
       font-size: 12px;
+    }
+
+    .path-row.has-action {
+      grid-template-columns: 24px minmax(0, 1fr) 32px;
     }
 
     .path-row:last-child {
       border-bottom: 0;
     }
 
-    .path-mark {
+    .path-icon {
       color: var(--accent-strong);
-      font-weight: 700;
-      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .path-icon.skipped {
+      color: var(--muted);
+    }
+
+    .path-icon svg,
+    .icon-button svg {
+      display: block;
+      height: 16px;
+      width: 16px;
     }
 
     .source-list {
@@ -379,6 +396,20 @@
       min-height: 28px;
       min-width: 28px;
       padding: 0;
+    }
+
+    button.icon-button:hover {
+      color: var(--danger);
+    }
+
+    .source-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .source-group {
+      display: grid;
+      gap: 6px;
     }
 
     .history-list {
@@ -434,15 +465,27 @@
       <section>
         <h2>Inputs</h2>
         <label>PDF sources</label>
-        <div class="row">
-          <button type="button" id="chooseLocalFolder">Choose root folder...</button>
-          <button type="button" id="choosePdfFiles">Add PDF files...</button>
-          <button type="button" id="clearSources" disabled>Clear all sources</button>
-          <button type="button" id="previewLocalFolder" disabled>Preview selection</button>
+        <div class="source-stack">
+          <div class="source-group">
+            <div class="row">
+              <button type="button" id="chooseLocalFolder">Choose root folder...</button>
+            </div>
+            <div class="file-meta" id="localFolderName">No folder selected</div>
+          </div>
+
+          <div class="source-group">
+            <div class="row">
+              <button type="button" id="choosePdfFiles">Add PDF files...</button>
+            </div>
+            <div class="file-meta" id="manualPdfName">No individual PDFs added</div>
+            <div class="path-list source-list" id="manualPdfList" hidden></div>
+          </div>
+
+          <div class="row">
+            <button type="button" id="clearSources" disabled>Clear all sources</button>
+            <button type="button" id="previewLocalFolder" disabled>Preview selection</button>
+          </div>
         </div>
-        <div class="file-meta" id="localFolderName" style="margin-top: 10px;">No folder selected</div>
-        <div class="file-meta" id="manualPdfName" style="margin-top: 4px;">No individual PDFs added</div>
-        <div class="path-list source-list" id="manualPdfList" hidden></div>
 
         <label for="includeFolderTerms">Only include folder names</label>
         <input id="includeFolderTerms" type="text" placeholder="bulletin de paie, payslip, payroll">
@@ -458,11 +501,11 @@
           </div>
           <div class="path-columns">
             <div>
-              <label>Selected sample</label>
+              <label>Selected PDFs</label>
               <div class="path-list" id="includedSample"></div>
             </div>
             <div>
-              <label>Skipped sample</label>
+              <label>Skipped PDFs</label>
               <div class="path-list" id="skippedSample"></div>
             </div>
           </div>
@@ -558,6 +601,7 @@
     let localFolderPath = "";
     let manualPdfPaths = [];
     let localFolderPreview = null;
+    let removedPreviewPaths = new Set();
 
     function renderHistory() {
       const history = getHistory();
@@ -631,6 +675,7 @@
 
         localFolderPath = payload.path || "";
         localFolderPreview = null;
+        removedPreviewPaths = new Set();
         localFolderName.textContent = localFolderPath || "No folder selected";
         updatePreviewButton();
         processLocalFolder.disabled = true;
@@ -655,6 +700,7 @@
 
         addManualPdfPaths(payload.paths || []);
         localFolderPreview = null;
+        removedPreviewPaths = new Set();
         updatePreviewButton();
         processLocalFolder.disabled = true;
         renderFolderPreview(null);
@@ -694,9 +740,9 @@
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "icon-button";
-        remove.textContent = "X";
         remove.title = "Remove this PDF";
         remove.setAttribute("aria-label", `Remove ${path}`);
+        remove.appendChild(createIcon("trash"));
         remove.addEventListener("click", () => removeManualPdf(index));
 
         row.append(text, remove);
@@ -707,6 +753,7 @@
     function removeManualPdf(index) {
       manualPdfPaths.splice(index, 1);
       localFolderPreview = null;
+      removedPreviewPaths = new Set();
       processLocalFolder.disabled = true;
       renderFolderPreview(null);
       renderManualPdfList();
@@ -723,6 +770,7 @@
       localFolderPath = "";
       manualPdfPaths = [];
       localFolderPreview = null;
+      removedPreviewPaths = new Set();
       localFolderName.textContent = "No folder selected";
       renderManualPdfList();
       processLocalFolder.disabled = true;
@@ -764,9 +812,10 @@
 
         const preview = await waitForPreview(payload.previewJobId);
         localFolderPreview = preview;
+        removedPreviewPaths = new Set();
         renderFolderPreview(preview);
-        processLocalFolder.disabled = Number(preview.includedCount || 0) === 0;
-        showMessage(`Preview ready. ${preview.includedCount || 0} PDF(s) selected, ${preview.skippedCount || 0} skipped.`);
+        processLocalFolder.disabled = effectiveIncludedCount(preview) === 0;
+        showMessage(`Preview ready. ${effectiveIncludedCount(preview)} PDF(s) selected, ${preview.skippedCount || 0} skipped.`);
       } catch (error) {
         localFolderPreview = null;
         renderFolderPreview(null);
@@ -786,9 +835,14 @@
         showMessage("Preview the selected PDFs first.", true);
         return;
       }
+      if (effectiveIncludedCount(localFolderPreview) === 0) {
+        showMessage("No PDFs remain selected after manual removals.", true);
+        return;
+      }
 
       const form = new FormData();
       form.append("preview_id", localFolderPreview.previewId);
+      form.append("removed_paths", JSON.stringify([...removedPreviewPaths]));
       form.append("mode", selectedMode());
       form.append("numbers_file", numbersFile, numbersFile.name);
 
@@ -807,7 +861,7 @@
         showMessage(`Extraction failed: ${error}`, true);
         setProgressStatus("Failed");
       } finally {
-        processLocalFolder.disabled = !localFolderPreview || Number(localFolderPreview.includedCount || 0) === 0;
+        processLocalFolder.disabled = !localFolderPreview || effectiveIncludedCount(localFolderPreview) === 0;
       }
     }
 
@@ -855,13 +909,29 @@
 
       folderPreview.hidden = false;
       previewTotal.textContent = String(preview.totalPdfCount || 0);
-      previewIncluded.textContent = String(preview.includedCount || 0);
+      previewIncluded.textContent = String(effectiveIncludedCount(preview));
       previewSkipped.textContent = String(preview.skippedCount || 0);
-      renderPathSample(includedSample, preview.includedSamples || [], "No selected PDFs", "[x]");
-      renderPathSample(skippedSample, preview.skippedSamples || [], "No skipped PDFs", "skip");
+      renderPathSample(
+        includedSample,
+        (preview.includedSamples || []).filter(item => !removedPreviewPaths.has(item.path)),
+        "No selected PDFs in this preview sample",
+        "check",
+        removePreviewPdf
+      );
+      renderPathSample(skippedSample, preview.skippedSamples || [], "No skipped PDFs", "skipped");
     }
 
-    function renderPathSample(container, items, emptyText, marker) {
+    function effectiveIncludedCount(preview) {
+      return Math.max(0, Number(preview.includedCount || 0) - removedPreviewPaths.size);
+    }
+
+    function removePreviewPdf(path) {
+      removedPreviewPaths.add(path);
+      renderFolderPreview(localFolderPreview);
+      processLocalFolder.disabled = !localFolderPreview || effectiveIncludedCount(localFolderPreview) === 0;
+    }
+
+    function renderPathSample(container, items, emptyText, iconName, onRemove = null) {
       container.innerHTML = "";
       if (!items.length) {
         const empty = document.createElement("div");
@@ -873,15 +943,49 @@
 
       for (const item of items) {
         const row = document.createElement("div");
-        row.className = "path-row";
-        const mark = document.createElement("span");
-        mark.className = "path-mark";
-        mark.textContent = marker;
+        row.className = onRemove ? "path-row has-action" : "path-row";
+        const icon = document.createElement("span");
+        icon.className = `path-icon ${iconName === "skipped" ? "skipped" : ""}`;
+        icon.appendChild(createIcon(iconName));
         const text = document.createElement("span");
         text.textContent = item.reason ? `${item.path} - ${item.reason}` : item.path;
-        row.append(mark, text);
+        row.append(icon, text);
+        if (onRemove) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "icon-button";
+          remove.title = "Remove this PDF from extraction";
+          remove.setAttribute("aria-label", `Remove ${item.path}`);
+          remove.appendChild(createIcon("trash"));
+          remove.addEventListener("click", () => onRemove(item.path));
+          row.appendChild(remove);
+        }
         container.appendChild(row);
       }
+    }
+
+    function createIcon(name) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "2");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+      svg.setAttribute("aria-hidden", "true");
+
+      const paths = {
+        check: ["M20 6 9 17l-5-5"],
+        skipped: ["M4 4l16 16", "M20 4 4 20"],
+        trash: ["M3 6h18", "M8 6V4h8v2", "M19 6l-1 14H6L5 6", "M10 11v6", "M14 11v6"],
+      };
+
+      for (const value of paths[name] || paths.check) {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", value);
+        svg.appendChild(path);
+      }
+      return svg;
     }
 
     function startExtractionJob(form, messages) {
@@ -1150,6 +1254,7 @@
     processLocalFolder.addEventListener("click", processFolderPreview);
     function invalidatePreview() {
       localFolderPreview = null;
+      removedPreviewPaths = new Set();
       processLocalFolder.disabled = true;
       renderFolderPreview(null);
     }

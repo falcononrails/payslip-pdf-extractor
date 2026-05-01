@@ -151,6 +151,63 @@ def test_web_folder_preview_and_extract_skips_explicitly_filtered_pdfs(tmp_path)
     )
 
 
+def test_web_folder_start_skips_manually_removed_preview_pdfs(tmp_path) -> None:
+    current = tmp_path / "current"
+    current.mkdir()
+    _write_pdf(current / "keep.pdf", ["Employee 123 page"])
+    _write_pdf(current / "remove.pdf", ["Employee 456 page"])
+    numbers_path = tmp_path / "numbers.csv"
+    numbers_path.write_text("123\n456\n", encoding="utf-8")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+
+        preview = _create_preview(base_url, {"rootPath": str(tmp_path), "excludeTerms": ""})
+
+        body, content_type = _multipart_body(
+            fields={
+                "preview_id": str(preview["previewId"]),
+                "mode": "separate",
+                "removed_paths": json.dumps(["current/remove.pdf"]),
+            },
+            files=[("numbers_file", "numbers.csv", numbers_path.read_bytes())],
+        )
+        start_payload = _start_folder_job(base_url, body, content_type)
+
+        job = _wait_for_job(base_url, str(start_payload["jobId"]))
+        with urllib.request.urlopen(f"{base_url}{job['downloadUrl']}", timeout=30) as response:
+            response_body = response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    summary = job["summary"]
+    assert summary["pdfCount"] == 1
+    assert summary["skippedPdfCount"] == 1
+    assert summary["matchedNumbersCount"] == 1
+
+    with zipfile.ZipFile(io.BytesIO(response_body)) as archive_file:
+        names = set(archive_file.namelist())
+        audit_rows = list(
+            csv.DictReader(io.StringIO(archive_file.read("audit.csv").decode("utf-8-sig")))
+        )
+
+    assert "123.pdf" in names
+    assert "456.pdf" not in names
+    assert any(
+        row["status"] == "skipped"
+        and "current/remove.pdf" in row["source_pdf"].replace("\\", "/")
+        and row["message"] == "Removed from preview selection"
+        for row in audit_rows
+    )
+
+
 def test_web_folder_preview_uses_include_folder_terms(tmp_path) -> None:
     included_folder = tmp_path / "BULLETINS DE PAIE 08-2026"
     skipped_folder = tmp_path / "contracts"

@@ -350,20 +350,38 @@ class WebHandler(BaseHTTPRequestHandler):
             if not number_files:
                 raise UserFacingWebError("Select an Excel or CSV identifier file.")
 
-            included_paths = tuple(item.path for item in preview.scan.included)
-            if not included_paths:
-                raise UserFacingWebError("No PDFs are included by the current filters.")
+            removed_paths = parse_json_string_list(first_form_value(form.fields, "removed_paths", "[]"))
+            removed_path_set = set(removed_paths)
+            included_items = tuple(item for item in preview.scan.included if item.relative_path not in removed_path_set)
+            removed_items = tuple(item for item in preview.scan.included if item.relative_path in removed_path_set)
 
-            skipped_rows = tuple(
-                AuditRow(
-                    status="skipped",
-                    source_pdf=item.path,
-                    page_number="",
-                    matched_numbers="",
-                    output_pdf="",
-                    message=item.reason,
+            included_paths = tuple(item.path for item in included_items)
+            if not included_paths:
+                raise UserFacingWebError("No PDFs are included after filters and manual removals.")
+
+            skipped_rows = (
+                tuple(
+                    AuditRow(
+                        status="skipped",
+                        source_pdf=item.path,
+                        page_number="",
+                        matched_numbers="",
+                        output_pdf="",
+                        message=item.reason,
+                    )
+                    for item in preview.scan.skipped
                 )
-                for item in preview.scan.skipped
+                + tuple(
+                    AuditRow(
+                        status="skipped",
+                        source_pdf=item.path,
+                        page_number="",
+                        matched_numbers="",
+                        output_pdf="",
+                        message="Removed from preview selection",
+                    )
+                    for item in removed_items
+                )
             )
 
             job = ExtractionJob(
@@ -381,8 +399,11 @@ class WebHandler(BaseHTTPRequestHandler):
                 job.append_message("Using manually selected PDF file(s).")
             job.append_message(f"Enumerated {preview.scan.total_pdf_count} PDF file(s).")
             job.append_message(
-                f"Filters included {len(preview.scan.included)} PDF(s) and skipped {len(preview.scan.skipped)} PDF(s)."
+                f"Filters selected {len(preview.scan.included)} PDF(s) and skipped {len(preview.scan.skipped)} PDF(s)."
             )
+            if removed_items:
+                job.append_message(f"Manual preview removals skipped {len(removed_items)} PDF(s).")
+            job.append_message(f"Extraction will read {len(included_paths)} PDF file(s) from their selected path(s).")
             register_job(job)
             thread = threading.Thread(target=run_extraction_job, args=(job,), daemon=True)
             thread.start()
@@ -479,7 +500,6 @@ class WebHandler(BaseHTTPRequestHandler):
 
         with path.open("rb") as file:
             shutil.copyfileobj(file, self.wfile, length=READ_CHUNK_SIZE)
-
 
 class UserFacingWebError(RuntimeError):
     def __init__(self, message: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
@@ -926,6 +946,16 @@ def first_form_value(fields: dict[str, list[str]], name: str, default: str) -> s
     if not values:
         return default
     return values[0]
+
+
+def parse_json_string_list(value: str) -> tuple[str, ...]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise UserFacingWebError("Invalid preview removal list.") from exc
+    if not isinstance(payload, list):
+        raise UserFacingWebError("Invalid preview removal list.")
+    return tuple(str(item) for item in payload if isinstance(item, str))
 
 
 def build_results_zip_name(created_at: datetime | None = None) -> str:
