@@ -349,6 +349,38 @@
       white-space: nowrap;
     }
 
+    .source-list {
+      margin-top: 8px;
+      max-height: 150px;
+    }
+
+    .manual-pdf-row {
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 32px;
+      gap: 8px;
+      align-items: center;
+      padding: 7px 8px 7px 10px;
+    }
+
+    .manual-pdf-row:last-child {
+      border-bottom: 0;
+    }
+
+    .manual-pdf-path {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    button.icon-button {
+      border-radius: 6px;
+      min-height: 28px;
+      min-width: 28px;
+      padding: 0;
+    }
+
     .history-list {
       display: grid;
       gap: 10px;
@@ -405,11 +437,12 @@
         <div class="row">
           <button type="button" id="chooseLocalFolder">Choose root folder...</button>
           <button type="button" id="choosePdfFiles">Add PDF files...</button>
-          <button type="button" id="clearSources" disabled>Clear sources</button>
+          <button type="button" id="clearSources" disabled>Clear all sources</button>
           <button type="button" id="previewLocalFolder" disabled>Preview selection</button>
         </div>
         <div class="file-meta" id="localFolderName" style="margin-top: 10px;">No folder selected</div>
         <div class="file-meta" id="manualPdfName" style="margin-top: 4px;">No individual PDFs added</div>
+        <div class="path-list source-list" id="manualPdfList" hidden></div>
 
         <label for="includeFolderTerms">Only include folder names</label>
         <input id="includeFolderTerms" type="text" placeholder="bulletin de paie, payslip, payroll">
@@ -502,6 +535,7 @@
     const processLocalFolder = document.getElementById("processLocalFolder");
     const localFolderName = document.getElementById("localFolderName");
     const manualPdfName = document.getElementById("manualPdfName");
+    const manualPdfList = document.getElementById("manualPdfList");
     const includeFolderTerms = document.getElementById("includeFolderTerms");
     const excludeTerms = document.getElementById("excludeTerms");
     const folderPreview = document.getElementById("folderPreview");
@@ -638,9 +672,45 @@
         manualPdfPaths.push(String(path));
         seen.add(String(path).toLowerCase());
       }
+      renderManualPdfList();
+    }
+
+    function renderManualPdfList() {
       manualPdfName.textContent = manualPdfPaths.length
         ? `${manualPdfPaths.length} individual PDF${manualPdfPaths.length === 1 ? "" : "s"} added`
         : "No individual PDFs added";
+
+      manualPdfList.innerHTML = "";
+      manualPdfList.hidden = manualPdfPaths.length === 0;
+      manualPdfPaths.forEach((path, index) => {
+        const row = document.createElement("div");
+        row.className = "manual-pdf-row";
+
+        const text = document.createElement("span");
+        text.className = "manual-pdf-path";
+        text.textContent = path;
+        text.title = path;
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "icon-button";
+        remove.textContent = "X";
+        remove.title = "Remove this PDF";
+        remove.setAttribute("aria-label", `Remove ${path}`);
+        remove.addEventListener("click", () => removeManualPdf(index));
+
+        row.append(text, remove);
+        manualPdfList.appendChild(row);
+      });
+    }
+
+    function removeManualPdf(index) {
+      manualPdfPaths.splice(index, 1);
+      localFolderPreview = null;
+      processLocalFolder.disabled = true;
+      renderFolderPreview(null);
+      renderManualPdfList();
+      updatePreviewButton();
     }
 
     function updatePreviewButton() {
@@ -654,7 +724,7 @@
       manualPdfPaths = [];
       localFolderPreview = null;
       localFolderName.textContent = "No folder selected";
-      manualPdfName.textContent = "No individual PDFs added";
+      renderManualPdfList();
       processLocalFolder.disabled = true;
       progressSection.hidden = true;
       progressLog.innerHTML = "";
@@ -1087,6 +1157,7 @@
     includeFolderTerms.addEventListener("input", invalidatePreview);
     excludeTerms.addEventListener("input", invalidatePreview);
 
+    renderManualPdfList();
     renderFolderPreview(null);
     renderHistory();
   </script>
