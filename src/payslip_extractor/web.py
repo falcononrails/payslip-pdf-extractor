@@ -27,7 +27,7 @@ from payslip_extractor import __version__
 from payslip_extractor.extractor import ExtractionError, run_extraction
 from payslip_extractor.folder_scan import FolderScanResult, scan_pdf_sources
 from payslip_extractor.models import AuditRow
-from payslip_extractor.numbers import NumberFileError
+from payslip_extractor.numbers import NumberFileError, read_numbers, read_numbers_from_text
 
 logger = logging.getLogger("payslip_extractor")
 READ_CHUNK_SIZE = 1024 * 1024
@@ -347,8 +347,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 raise UserFacingWebError("Invalid output mode.")
 
             number_files = form.files.get("numbers_file", [])
-            if not number_files:
-                raise UserFacingWebError("Select an Excel or CSV identifier file.")
+            pasted_identifiers = first_form_value(form.fields, "identifiers_text", "").strip()
+            numbers_file = prepare_numbers_file(number_files, pasted_identifiers, workspace)
 
             removed_paths = parse_json_string_list(first_form_value(form.fields, "removed_paths", "[]"))
             removed_path_set = set(removed_paths)
@@ -388,7 +388,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 id=uuid.uuid4().hex,
                 workspace=workspace,
                 pdf_paths=included_paths,
-                numbers_file=number_files[0].path,
+                numbers_file=numbers_file,
                 mode=mode,
                 skipped_audit_rows=skipped_rows,
                 root_path=preview.scan.root_path,
@@ -956,6 +956,36 @@ def parse_json_string_list(value: str) -> tuple[str, ...]:
     if not isinstance(payload, list):
         raise UserFacingWebError("Invalid preview removal list.")
     return tuple(str(item) for item in payload if isinstance(item, str))
+
+
+def prepare_numbers_file(number_files: list[UploadedFile], pasted_identifiers: str, workspace: Path) -> Path:
+    if not number_files and not pasted_identifiers:
+        raise UserFacingWebError("Paste identifiers or choose an identifier file.")
+
+    if number_files and not pasted_identifiers:
+        return number_files[0].path
+
+    if pasted_identifiers and not number_files:
+        path = workspace / "pasted-identifiers.txt"
+        path.write_text(pasted_identifiers, encoding="utf-8")
+        return path
+
+    try:
+        numbers = [*read_numbers(number_files[0].path), *read_numbers_from_text(pasted_identifiers)]
+    except NumberFileError as exc:
+        raise UserFacingWebError(str(exc)) from exc
+
+    combined_path = workspace / "combined-identifiers.txt"
+    seen: set[str] = set()
+    unique_numbers: list[str] = []
+    for number in numbers:
+        if number in seen:
+            continue
+        seen.add(number)
+        unique_numbers.append(number)
+
+    combined_path.write_text("\n".join(unique_numbers) + "\n", encoding="utf-8")
+    return combined_path
 
 
 def build_results_zip_name(created_at: datetime | None = None) -> str:

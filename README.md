@@ -1,13 +1,13 @@
 # Payslip PDF Extractor
 
-Fast local tool for extracting pages from searchable payroll PDFs using employee, CNSS, or other numeric identifiers from an Excel/CSV file.
+Fast local tool for extracting pages from searchable payroll PDFs using employee, CNSS, or other numeric identifiers from pasted text, Excel, CSV, or plain text files.
 
 The Windows build is designed for locked-down computers: the user downloads the executable artifact and runs it without installing Python or packages.
 
 ## What It Does
 
 - Reads many large searchable-text PDF files.
-- Reads target numbers from `.xlsx`, `.xlsm`, or `.csv`.
+- Reads target numbers from pasted text, `.xlsx`, `.xlsm`, `.csv`, or plain text files.
 - Finds exact identifier-token matches only, so `123` does not match `91234`.
 - Extracts only pages where a target number appears.
 - Writes either one PDF per number or one merged PDF.
@@ -28,7 +28,7 @@ Double-clicking the executable opens a local browser UI. PDF folders/files are s
 2. Enter optional include folder names such as `bulletin de paie` to keep only matching folders.
 3. Enter folder/name exclude terms such as `archive`, `backup`, `old`, or `temp` when needed.
 4. Preview the PDF selection and confirm the selected/skipped counts.
-5. Select the Excel or CSV file containing identifiers.
+5. Paste identifiers, choose an identifier file, or do both.
 6. Choose one merged PDF or one PDF per number.
 7. Process the preview, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
 
@@ -51,7 +51,7 @@ Merged output:
 ```powershell
 payslip-extractor.exe `
   --pdf "C:\paie\bulletins.pdf" `
-  --numbers-file "C:\paie\matricules.csv" `
+  --numbers-file "C:\paie\matricules.txt" `
   --output-dir "C:\paie\extraits" `
   --mode merged
 ```

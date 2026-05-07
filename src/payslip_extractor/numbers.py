@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import csv
+import re
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
 from openpyxl import load_workbook
 
-SUPPORTED_NUMBER_FILE_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
+SUPPORTED_NUMBER_FILE_SUFFIXES = {".csv", ".txt", ".xlsx", ".xlsm"}
 
 
 class NumberFileError(ValueError):
@@ -19,18 +19,24 @@ def _is_searchable_identifier(text: str) -> bool:
 
 
 def read_numbers(path: Path) -> list[str]:
-    """Read unique searchable identifiers (numbers or alphanumeric codes) from a CSV/XLSX/XLSM file."""
+    """Read unique searchable identifiers from Excel, CSV, or plain-text-like files."""
     path = Path(path)
     suffix = path.suffix.lower()
 
-    if suffix == ".csv":
-        values = _iter_csv_values(path)
-    elif suffix in {".xlsx", ".xlsm"}:
+    if suffix in {".xlsx", ".xlsm"}:
         values = _iter_workbook_values(path)
     else:
-        supported = ", ".join(sorted(SUPPORTED_NUMBER_FILE_SUFFIXES))
-        raise NumberFileError(f"Unsupported number file type '{suffix}'. Use {supported}.")
+        values = _iter_text_values(path)
 
+    return _collect_numbers(values, "number file")
+
+
+def read_numbers_from_text(text: str) -> list[str]:
+    """Read unique searchable identifiers from pasted plain text."""
+    return _collect_numbers(_iter_text_tokens(text), "pasted identifiers")
+
+
+def _collect_numbers(values: Iterable[object], source_label: str) -> list[str]:
     seen: set[str] = set()
     numbers: list[str] = []
     for value in values:
@@ -40,7 +46,7 @@ def read_numbers(path: Path) -> list[str]:
             numbers.append(candidate)
 
     if not numbers:
-        raise NumberFileError("No searchable identifiers were found in the number file.")
+        raise NumberFileError(f"No searchable identifiers were found in {source_label}.")
 
     return numbers
 
@@ -71,19 +77,23 @@ def normalize_number_cell(value: object) -> str | None:
     return text if _is_searchable_identifier(text) else None
 
 
-def _iter_csv_values(path: Path) -> Iterable[object]:
+def _iter_text_values(path: Path) -> Iterable[object]:
     try:
-        with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-            reader = csv.reader(csv_file)
-            for row in reader:
-                yield from row
+        text = path.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:
-        with path.open("r", encoding="cp1252", newline="") as csv_file:
-            reader = csv.reader(csv_file)
-            for row in reader:
-                yield from row
+        try:
+            text = path.read_text(encoding="cp1252")
+        except UnicodeDecodeError as exc:
+            raise NumberFileError(f"Could not read text from number file '{path}'.") from exc
     except OSError as exc:
         raise NumberFileError(f"Could not read number file '{path}': {exc}") from exc
+
+    yield from _iter_text_tokens(text)
+
+
+def _iter_text_tokens(text: str) -> Iterable[object]:
+    for token in re.findall(r"[A-Za-z0-9_'.]+", text):
+        yield token
 
 
 def _iter_workbook_values(path: Path) -> Iterable[object]:

@@ -91,6 +91,51 @@ def test_web_manual_pdf_preview_returns_zip_and_summary(tmp_path) -> None:
     assert {"123.pdf", "audit.csv", "extraction.log"}.issubset(names)
 
 
+def test_web_pasted_identifiers_return_zip_and_summary(tmp_path) -> None:
+    pdf_path = tmp_path / "payroll.pdf"
+    _write_pdf(pdf_path, ["Employee 123 page", "Employee 456 page"])
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+        preview = _create_preview(
+            base_url,
+            {"rootPath": "", "pdfPaths": [str(pdf_path)], "excludeTerms": ""},
+        )
+
+        body, content_type = _multipart_body(
+            fields={
+                "preview_id": str(preview["previewId"]),
+                "mode": "separate",
+                "identifiers_text": "123\nCNSS456\n",
+            },
+            files=[],
+        )
+        start_payload = _start_folder_job(base_url, body, content_type)
+
+        job = _wait_for_job(base_url, str(start_payload["jobId"]))
+        with urllib.request.urlopen(f"{base_url}{job['downloadUrl']}", timeout=30) as response:
+            response_body = response.read()
+            summary = job["summary"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert summary["numbersCount"] == 2
+    assert summary["matchedNumbersCount"] == 1
+    assert summary["matchedPagesCount"] == 1
+
+    with zipfile.ZipFile(io.BytesIO(response_body)) as archive:
+        names = set(archive.namelist())
+
+    assert {"123.pdf", "audit.csv", "extraction.log"}.issubset(names)
+
+
 def test_web_folder_preview_and_extract_skips_explicitly_filtered_pdfs(tmp_path) -> None:
     current = tmp_path / "current"
     archive = tmp_path / "archive"

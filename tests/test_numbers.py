@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from openpyxl import Workbook
 
-from payslip_extractor.numbers import normalize_number_cell, read_numbers
+from payslip_extractor.numbers import normalize_number_cell, read_numbers, read_numbers_from_text
 
 
 def test_normalize_number_cell_keeps_digit_strings_and_integral_numbers() -> None:
@@ -38,9 +38,20 @@ def test_read_numbers_from_csv_deduplicates_in_order(tmp_path) -> None:
 
 def test_read_numbers_from_csv_includes_alphanumeric(tmp_path) -> None:
     csv_file = tmp_path / "numbers.csv"
-    csv_file.write_text("456A\n123\nA789\nName\n", encoding="utf-8")
+    csv_file.write_text("456A\n123\nA789\nName\nCNSS 789\nABC123; 456B\n", encoding="utf-8")
 
-    assert read_numbers(csv_file) == ["456A", "123", "A789"]
+    assert read_numbers(csv_file) == ["456A", "123", "A789", "789", "ABC123", "456B"]
+
+
+def test_read_numbers_from_plain_text_extracts_tokens(tmp_path) -> None:
+    text_file = tmp_path / "identifiers.anything"
+    text_file.write_text("matricule: 001\nABC123; 456A\nCNSS 789\n001\n", encoding="utf-8")
+
+    assert read_numbers(text_file) == ["001", "ABC123", "456A", "789"]
+
+
+def test_read_numbers_from_pasted_text_extracts_tokens() -> None:
+    assert read_numbers_from_text("12345\nABC123, CNSS456\nheader") == ["12345", "ABC123", "CNSS456"]
 
 
 def test_read_numbers_from_xlsx_all_sheets(tmp_path) -> None:

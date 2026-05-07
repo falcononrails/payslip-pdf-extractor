@@ -149,7 +149,8 @@
       pointer-events: none;
     }
 
-    input[type="text"] {
+    input[type="text"],
+    textarea {
       border: 1px solid var(--line);
       border-radius: 7px;
       color: var(--ink);
@@ -157,6 +158,13 @@
       min-height: 36px;
       padding: 7px 10px;
       width: min(560px, 100%);
+    }
+
+    textarea {
+      display: block;
+      min-height: 110px;
+      resize: vertical;
+      width: min(680px, 100%);
     }
 
     .file-list {
@@ -511,10 +519,13 @@
           </div>
         </div>
 
+        <label for="identifiersText">Paste identifiers</label>
+        <textarea id="identifiersText" placeholder="12345&#10;ABC123&#10;CNSS456"></textarea>
+
         <label for="numbersInput">Identifier file</label>
         <div class="row">
-          <label class="file-button" for="numbersInput">Choose Excel or CSV...</label>
-          <input id="numbersInput" type="file" accept=".xlsx,.xlsm,.csv">
+          <label class="file-button" for="numbersInput">Choose identifier file...</label>
+          <input id="numbersInput" type="file">
           <span id="numbersName" class="file-meta">No file selected</span>
         </div>
 
@@ -568,6 +579,7 @@
 
   <script>
     const numbersInput = document.getElementById("numbersInput");
+    const identifiersText = document.getElementById("identifiersText");
     const numbersName = document.getElementById("numbersName");
     const messageBox = document.getElementById("messageBox");
     const historyList = document.getElementById("historyList");
@@ -827,8 +839,9 @@
 
     async function processFolderPreview() {
       clearMessage();
-      if (!numbersFile) {
-        showMessage("Choose an Excel or CSV identifier file.", true);
+      const pastedIdentifiers = identifiersText.value.trim();
+      if (!numbersFile && !pastedIdentifiers) {
+        showMessage("Paste identifiers or choose an identifier file.", true);
         return;
       }
       if (!localFolderPreview || !localFolderPreview.previewId) {
@@ -844,10 +857,13 @@
       form.append("preview_id", localFolderPreview.previewId);
       form.append("removed_paths", JSON.stringify([...removedPreviewPaths]));
       form.append("mode", selectedMode());
-      form.append("numbers_file", numbersFile, numbersFile.name);
+      form.append("identifiers_text", pastedIdentifiers);
+      if (numbersFile) {
+        form.append("numbers_file", numbersFile, numbersFile.name);
+      }
 
       processLocalFolder.disabled = true;
-      beginProgress("Copying identifier file to the local extractor. PDF files stay where they are and are read during extraction.");
+      beginProgress("Sending identifier input to the local extractor. PDF files stay where they are and are read during extraction.");
       showMessage("Processing selected PDFs. Keep this window open.");
       try {
         const startPayload = await startExtractionJob(form, folderExtractionMessages());
@@ -885,14 +901,14 @@
     function folderExtractionMessages() {
       return {
         url: "/api/folder/start",
-        loadedText: "Identifier file copied. Preparing local extraction job.",
+        loadedText: "Identifier input received. Preparing local extraction job.",
         loadedStatus: "Preparing",
         startedText: "Local extraction job started.",
-        progressStatus: "Copying",
+        progressStatus: "Sending",
         progressText: (loaded, total, percent) =>
-          `Copying identifier file: ${formatBytes(loaded)} of ${formatBytes(total)} (${percent}%). PDFs stay in their selected locations.`,
+          `Sending identifier input: ${formatBytes(loaded)} of ${formatBytes(total)} (${percent}%). PDFs stay in their selected locations.`,
         indeterminateText: loaded =>
-          `Copying identifier file: ${formatBytes(loaded)} sent. PDFs stay in their selected locations.`,
+          `Sending identifier input: ${formatBytes(loaded)} sent. PDFs stay in their selected locations.`,
       };
     }
 
@@ -1015,11 +1031,11 @@
         });
 
         request.addEventListener("error", () => {
-          reject(new Error("Could not send the identifier file to the local extractor."));
+          reject(new Error("Could not send the identifier input to the local extractor."));
         });
 
         request.addEventListener("abort", () => {
-          reject(new Error("Identifier file copy was cancelled."));
+          reject(new Error("Identifier input send was cancelled."));
         });
 
         request.send(form);
