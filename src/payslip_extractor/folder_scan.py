@@ -31,6 +31,7 @@ class FolderScanResult:
     root_path: Path | None
     exclude_terms: tuple[str, ...]
     include_folder_terms: tuple[str, ...]
+    include_filename_terms: tuple[str, ...]
     included: tuple[FolderPdf, ...]
     skipped: tuple[SkippedFolderPdf, ...]
 
@@ -66,12 +67,14 @@ def scan_local_pdf_folder(
     root_path: Path | str,
     exclude_terms: str | list[str] | tuple[str, ...],
     include_folder_terms: str | list[str] | tuple[str, ...] = (),
+    include_filename_terms: str | list[str] | tuple[str, ...] = (),
 ) -> FolderScanResult:
     return scan_pdf_sources(
         root_path=root_path,
         pdf_paths=(),
         exclude_terms=exclude_terms,
         include_folder_terms=include_folder_terms,
+        include_filename_terms=include_filename_terms,
     )
 
 
@@ -80,6 +83,7 @@ def scan_pdf_sources(
     pdf_paths: list[str] | tuple[str, ...] | tuple[Path, ...],
     exclude_terms: str | list[str] | tuple[str, ...],
     include_folder_terms: str | list[str] | tuple[str, ...] = (),
+    include_filename_terms: str | list[str] | tuple[str, ...] = (),
     progress_callback: Callable[[str], None] | None = None,
 ) -> FolderScanResult:
     root = Path(root_path).expanduser().resolve(strict=False) if root_path else None
@@ -90,6 +94,7 @@ def scan_pdf_sources(
 
     terms = normalize_exclude_terms(exclude_terms)
     folder_terms = normalize_exclude_terms(include_folder_terms)
+    filename_terms = normalize_exclude_terms(include_filename_terms)
     candidates: list[FolderPdf] = []
     included: list[FolderPdf] = []
     skipped: list[SkippedFolderPdf] = []
@@ -104,6 +109,8 @@ def scan_pdf_sources(
         report(f"Walking folder tree: {root}")
         if folder_terms:
             report(f"Only including PDFs under folder names matching: {', '.join(folder_terms)}")
+        if filename_terms:
+            report(f"Only including PDF file names matching: {', '.join(filename_terms)}")
         folder_count = 0
 
         def on_walk_error(error: OSError) -> None:
@@ -177,12 +184,25 @@ def scan_pdf_sources(
             )
             continue
 
+        matched_filename_term = _first_matching_filename_term(candidate.path.name, filename_terms)
+        if filename_terms and matched_filename_term is None:
+            skipped.append(
+                SkippedFolderPdf(
+                    path=candidate.path,
+                    relative_path=candidate.relative_path,
+                    term=", ".join(filename_terms),
+                    reason_label="Filename did not match include filter",
+                )
+            )
+            continue
+
         included.append(candidate)
 
     return FolderScanResult(
         root_path=root,
         exclude_terms=terms,
         include_folder_terms=folder_terms,
+        include_filename_terms=filename_terms,
         included=tuple(included),
         skipped=tuple(skipped),
     )
@@ -201,28 +221,38 @@ def _first_matching_folder_term(folder_names: tuple[str, ...], terms: tuple[str,
         return None
 
     for term in terms:
-        if any(_folder_name_matches(folder_name, term) for folder_name in folder_names):
+        if any(_name_matches(folder_name, term) for folder_name in folder_names):
             return term
     return None
 
 
-def _folder_name_matches(folder_name: str, term: str) -> bool:
-    folder_key = _match_key(folder_name)
+def _first_matching_filename_term(filename: str, terms: tuple[str, ...]) -> str | None:
+    if not terms:
+        return None
+
+    for term in terms:
+        if _name_matches(filename, term):
+            return term
+    return None
+
+
+def _name_matches(name: str, term: str) -> bool:
+    name_key = _match_key(name)
     term_key = _match_key(term)
-    if not folder_key or not term_key:
+    if not name_key or not term_key:
         return False
-    if term_key in folder_key:
+    if term_key in name_key:
         return True
 
-    singular_folder_key = _match_key(folder_name, singularize=True)
+    singular_name_key = _match_key(name, singularize=True)
     singular_term_key = _match_key(term, singularize=True)
-    if singular_term_key in singular_folder_key:
+    if singular_term_key in singular_name_key:
         return True
 
     if len(singular_term_key) < 4:
         return False
 
-    return _has_near_substring(singular_folder_key, singular_term_key)
+    return _has_near_substring(singular_name_key, singular_term_key)
 
 
 def _match_key(value: str, singularize: bool = False) -> str:

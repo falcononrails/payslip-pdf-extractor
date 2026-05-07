@@ -63,11 +63,47 @@
       white-space: nowrap;
     }
 
-    main.wrap {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 360px;
-      gap: 16px;
+    .app-main {
       padding: 16px 0 28px;
+    }
+
+    .top-nav {
+      display: inline-flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+
+    button.nav-tab {
+      min-height: 32px;
+      padding: 5px 10px;
+    }
+
+    button.nav-tab.active {
+      background: var(--soft);
+      border-color: #9ccbc4;
+      color: var(--accent-strong);
+    }
+
+    .setup-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .app-view {
+      animation: view-enter 160ms ease-out;
+    }
+
+    @keyframes view-enter {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     section {
@@ -202,6 +238,12 @@
       white-space: nowrap;
     }
 
+    .field-note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 12px;
+    }
+
     .empty {
       color: var(--muted);
       padding: 20px;
@@ -283,7 +325,7 @@
       border: 1px solid var(--line);
       border-radius: 7px;
       background: #fbfcfd;
-      max-height: 260px;
+      max-height: min(62vh, 620px);
       overflow: auto;
     }
 
@@ -449,7 +491,17 @@
     }
 
     @media (max-width: 900px) {
-      main.wrap {
+      header .wrap {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 12px 0;
+      }
+
+      .top-nav {
+        margin-left: 0;
+      }
+
+      .setup-grid {
         grid-template-columns: 1fr;
       }
 
@@ -464,14 +516,19 @@
   <header>
     <div class="wrap">
       <h1>Payslip PDF Extractor</h1>
-      <div class="status-pill" id="serverStatus">Local web UI</div>
+      <nav class="top-nav" aria-label="Views">
+        <button class="nav-tab active" type="button" data-view="setupView">Setup</button>
+        <button class="nav-tab" type="button" data-view="progressView">Progress</button>
+        <button class="nav-tab" type="button" data-view="historyView">History</button>
+      </nav>
     </div>
   </header>
 
-  <main class="wrap">
-    <div>
-      <section>
-        <h2>Inputs</h2>
+  <main class="wrap app-main">
+    <div class="app-view" id="setupView">
+      <div class="setup-grid">
+        <section>
+          <h2>PDF Selection</h2>
         <label>PDF sources</label>
         <div class="source-stack">
           <div class="source-group">
@@ -495,8 +552,13 @@
           </div>
         </div>
 
+        <div class="field-note">Use commas or semicolons between filter terms.</div>
+
         <label for="includeFolderTerms">Only include folder names</label>
         <input id="includeFolderTerms" type="text" placeholder="bulletin de paie, payslip, payroll">
+
+        <label for="includeFilenameTerms">Only include PDF file names</label>
+        <input id="includeFilenameTerms" type="text" placeholder="paie, bulletin, payroll">
 
         <label for="excludeTerms">Exclude folder/name terms</label>
         <input id="excludeTerms" type="text" placeholder="archive, backup, old, temp">
@@ -518,37 +580,43 @@
             </div>
           </div>
         </div>
+        </section>
 
-        <label for="identifiersText">Paste identifiers</label>
-        <textarea id="identifiersText" placeholder="12345&#10;ABC123&#10;CNSS456"></textarea>
+        <section>
+          <h2>Identifiers</h2>
+          <label for="identifiersText">Paste identifiers</label>
+          <textarea id="identifiersText" placeholder="12345&#10;ABC123&#10;CNSS456"></textarea>
 
-        <label for="numbersInput">Identifier file</label>
-        <div class="row">
-          <label class="file-button" for="numbersInput">Choose identifier file...</label>
-          <input id="numbersInput" type="file">
-          <span id="numbersName" class="file-meta">No file selected</span>
-        </div>
+          <label for="numbersInput">Identifier file</label>
+          <div class="row">
+            <label class="file-button" for="numbersInput">Choose identifier file...</label>
+            <input id="numbersInput" type="file">
+            <span id="numbersName" class="file-meta">No file selected</span>
+          </div>
 
-        <label>Output mode</label>
-        <div class="mode-toggle">
-          <label>
-            <input type="radio" name="mode" value="separate" checked>
-            <span>One PDF per identifier</span>
-          </label>
-          <label>
-            <input type="radio" name="mode" value="merged">
-            <span>One merged PDF</span>
-          </label>
-        </div>
+          <label>Output mode</label>
+          <div class="mode-toggle">
+            <label>
+              <input type="radio" name="mode" value="separate" checked>
+              <span>One PDF per identifier</span>
+            </label>
+            <label>
+              <input type="radio" name="mode" value="merged">
+              <span>One merged PDF</span>
+            </label>
+          </div>
 
-        <div class="row" style="margin-top: 16px;">
-          <button class="primary" type="button" id="processLocalFolder" disabled>Process preview and download ZIP</button>
-        </div>
+          <div class="row" style="margin-top: 16px;">
+            <button class="primary" type="button" id="processLocalFolder" disabled>Process preview and download ZIP</button>
+          </div>
 
-        <div id="messageBox" class="message" hidden></div>
-      </section>
+          <div id="messageBox" class="message" hidden></div>
+        </section>
+      </div>
+    </div>
 
-      <section style="margin-top: 16px;" id="progressSection" hidden>
+    <div class="app-view" id="progressView" hidden>
+      <section id="progressSection">
         <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
           <h2 style="margin: 0;">Progress</h2>
           <span class="status-pill" id="progressStatus">Ready</span>
@@ -566,7 +634,7 @@
       </section>
     </div>
 
-    <aside>
+    <div class="app-view" id="historyView" hidden>
       <section>
         <div class="row" style="justify-content: space-between; margin-bottom: 8px;">
           <h2 style="margin: 0;">History</h2>
@@ -574,7 +642,7 @@
         </div>
         <div class="history-list" id="historyList"></div>
       </section>
-    </aside>
+    </div>
   </main>
 
   <script>
@@ -592,6 +660,7 @@
     const manualPdfName = document.getElementById("manualPdfName");
     const manualPdfList = document.getElementById("manualPdfList");
     const includeFolderTerms = document.getElementById("includeFolderTerms");
+    const includeFilenameTerms = document.getElementById("includeFilenameTerms");
     const excludeTerms = document.getElementById("excludeTerms");
     const folderPreview = document.getElementById("folderPreview");
     const previewTotal = document.getElementById("previewTotal");
@@ -606,6 +675,8 @@
     const lastMatchedIds = document.getElementById("lastMatchedIds");
     const lastPages = document.getElementById("lastPages");
     const lastDuration = document.getElementById("lastDuration");
+    const navTabs = Array.from(document.querySelectorAll(".nav-tab"));
+    const appViews = Array.from(document.querySelectorAll(".app-view"));
 
     const historyKey = "payslipExtractor.history.v1";
     let numbersFile = null;
@@ -614,6 +685,15 @@
     let manualPdfPaths = [];
     let localFolderPreview = null;
     let removedPreviewPaths = new Set();
+
+    function showView(viewId) {
+      for (const view of appViews) {
+        view.hidden = view.id !== viewId;
+      }
+      for (const tab of navTabs) {
+        tab.classList.toggle("active", tab.dataset.view === viewId);
+      }
+    }
 
     function renderHistory() {
       const history = getHistory();
@@ -634,8 +714,8 @@
             <span class="file-meta">${escapeHtml(formatDate(item.createdAt))}</span>
           </div>
           <div class="history-stats">
-            ${item.pdfCount} PDFs · ${item.matchedNumbersCount}/${item.numbersCount} identifiers ·
-            ${item.matchedPagesCount} pages · ${formatDuration(item.durationSeconds)}
+            ${item.pdfCount} PDFs - ${item.matchedNumbersCount}/${item.numbersCount} identifiers -
+            ${item.matchedPagesCount} pages - ${formatDuration(item.durationSeconds)}
           </div>
         `;
         if (skipped) {
@@ -814,6 +894,7 @@
             rootPath: localFolderPath,
             pdfPaths: manualPdfPaths,
             includeFolderTerms: includeFolderTerms.value,
+            includeFilenameTerms: includeFilenameTerms.value,
             excludeTerms: excludeTerms.value,
           }),
         });
@@ -828,6 +909,7 @@
         renderFolderPreview(preview);
         processLocalFolder.disabled = effectiveIncludedCount(preview) === 0;
         showMessage(`Preview ready. ${effectiveIncludedCount(preview)} PDF(s) selected, ${preview.skippedCount || 0} skipped.`);
+        showView("setupView");
       } catch (error) {
         localFolderPreview = null;
         renderFolderPreview(null);
@@ -1116,6 +1198,7 @@
     }
 
     function beginProgress(text) {
+      showView("progressView");
       progressSection.hidden = false;
       progressLog.innerHTML = "";
       uploadProgressLine = null;
@@ -1263,6 +1346,10 @@
       renderHistory();
     });
 
+    navTabs.forEach(tab => {
+      tab.addEventListener("click", () => showView(tab.dataset.view));
+    });
+
     chooseLocalFolder.addEventListener("click", chooseFolder);
     choosePdfFiles.addEventListener("click", choosePdfs);
     clearSources.addEventListener("click", clearPdfSources);
@@ -1276,6 +1363,7 @@
     }
 
     includeFolderTerms.addEventListener("input", invalidatePreview);
+    includeFilenameTerms.addEventListener("input", invalidatePreview);
     excludeTerms.addEventListener("input", invalidatePreview);
 
     renderManualPdfList();

@@ -22,19 +22,21 @@ Download one of the GitHub Actions artifacts:
 - `payslip-extractor-onefile-windows`: one `.exe`.
 - `payslip-extractor-folder-windows`: fallback portable folder if the one-file executable is blocked by antivirus policy.
 
-Double-clicking the executable opens a local browser UI. PDF folders/files are selected by the local Python app and read from their existing paths; PDFs are not browser-uploaded or copied before preview. The Excel/CSV identifier file is copied into the temporary local job workspace when extraction starts.
+Double-clicking the executable opens a local browser UI. PDF folders/files are selected by the local Python app and read from their existing paths; PDFs are not browser-uploaded or copied before preview. Pasted identifiers or the selected identifier file are copied into the temporary local job workspace when extraction starts.
 
 1. Choose a root folder, add individual PDF files, or do both. The local app reads those PDF paths directly.
 2. Enter optional include folder names such as `bulletin de paie` to keep only matching folders.
-3. Enter folder/name exclude terms such as `archive`, `backup`, `old`, or `temp` when needed.
-4. Preview the PDF selection and confirm the selected/skipped counts.
-5. Paste identifiers, choose an identifier file, or do both.
-6. Choose one merged PDF or one PDF per number.
-7. Process the preview, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
+3. Enter optional include PDF filename terms such as `paie`, `bulletin`, or `payroll` to keep only matching PDF names.
+4. Enter folder/name exclude terms such as `archive`, `backup`, `old`, or `temp` when needed.
+5. Preview the PDF selection and confirm the selected/skipped counts.
+6. Paste identifiers, choose an identifier file, or do both.
+7. Choose one merged PDF or one PDF per number.
+8. Process the preview, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
 
 The browser UI keeps local run history with summary stats in browser localStorage. The history is stored only on that computer.
-The progress panel shows preview progress first. On shared folders or VPN paths, this is where the Python app lists directory entries and reports folder-walk/PDF counts. During extraction, the same panel shows PDF/page scanning progress, packaging, and download readiness. Skipped PDFs are written to `audit.csv` with status `skipped`.
+The Progress view shows preview progress first. On shared folders or VPN paths, this is where the Python app lists directory entries and reports folder-walk/PDF counts. During extraction, the same view shows PDF/page scanning progress, packaging, and download readiness. Skipped PDFs are written to `audit.csv` with status `skipped`.
 Include folder matching ignores case, accents, repeated spaces, punctuation, singular/plural `s`, and date suffixes, so `bulletin de paie` matches names like `BULLETINS DE PAIE`, `BULLETIN   DE PAIE`, and `BULLETINS DE PAIE 08-2026`.
+Include filename matching uses the same tolerant matching against the PDF file name. Filter fields accept comma-separated, semicolon-separated, or newline-separated terms.
 
 ## CLI Usage
 

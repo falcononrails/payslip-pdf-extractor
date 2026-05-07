@@ -82,6 +82,48 @@ def test_scan_pdf_sources_includes_only_fuzzy_matching_folder_names(tmp_path) ->
     ]
 
 
+def test_scan_pdf_sources_includes_only_matching_file_names(tmp_path) -> None:
+    folder = tmp_path / "legacy"
+    folder.mkdir()
+    (folder / "BULLETINS-DE-PAIE_08-2026.pdf").write_text("x", encoding="utf-8")
+    (folder / "contract.pdf").write_text("x", encoding="utf-8")
+    (folder / "payroll-summary.PDF").write_text("x", encoding="utf-8")
+
+    result = scan_pdf_sources(tmp_path, (), "", include_filename_terms="bulletin de paie, payroll")
+
+    assert [item.relative_path for item in result.included] == [
+        "legacy/BULLETINS-DE-PAIE_08-2026.pdf",
+        "legacy/payroll-summary.PDF",
+    ]
+    assert [(item.relative_path, item.reason) for item in result.skipped] == [
+        ("legacy/contract.pdf", "Filename did not match include filter: bulletin de paie, payroll")
+    ]
+
+
+def test_scan_pdf_sources_combines_folder_and_filename_includes(tmp_path) -> None:
+    payslips = tmp_path / "BULLETINS DE PAIE"
+    contracts = tmp_path / "contracts"
+    payslips.mkdir()
+    contracts.mkdir()
+    (payslips / "august.pdf").write_text("x", encoding="utf-8")
+    (payslips / "notes.pdf").write_text("x", encoding="utf-8")
+    (contracts / "august.pdf").write_text("x", encoding="utf-8")
+
+    result = scan_pdf_sources(
+        tmp_path,
+        (),
+        "",
+        include_folder_terms="bulletin de paie",
+        include_filename_terms="august",
+    )
+
+    assert [item.relative_path for item in result.included] == ["BULLETINS DE PAIE/august.pdf"]
+    assert [(item.relative_path, item.reason) for item in result.skipped] == [
+        ("BULLETINS DE PAIE/notes.pdf", "Filename did not match include filter: august"),
+        ("contracts/august.pdf", "Folder did not match include filter: bulletin de paie"),
+    ]
+
+
 def test_scan_pdf_sources_folder_include_tolerates_typos_and_case(tmp_path) -> None:
     folder = tmp_path / "BULLETINS DE PAIE"
     folder.mkdir()

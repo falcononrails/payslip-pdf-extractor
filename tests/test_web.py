@@ -292,6 +292,43 @@ def test_web_folder_preview_uses_include_folder_terms(tmp_path) -> None:
     ]
 
 
+def test_web_folder_preview_uses_include_filename_terms(tmp_path) -> None:
+    current = tmp_path / "current"
+    current.mkdir()
+    _write_pdf(current / "bulletins-paie.pdf", ["Employee 123 page"])
+    _write_pdf(current / "contract.pdf", ["Employee 456 page"])
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+
+        preview = _create_preview(
+            base_url,
+            {
+                "rootPath": str(tmp_path),
+                "includeFilenameTerms": "bulletin paie",
+                "excludeTerms": "",
+            },
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert preview["includeFilenameTerms"] == ["bulletin paie"]
+    assert preview["totalPdfCount"] == 2
+    assert preview["includedCount"] == 1
+    assert preview["skippedCount"] == 1
+    assert preview["includedSamples"] == [{"path": "current/bulletins-paie.pdf"}]
+    assert preview["skippedSamples"] == [
+        {"path": "current/contract.pdf", "reason": "Filename did not match include filter: bulletin paie"}
+    ]
+
+
 def test_bind_web_server_falls_back_when_port_is_busy() -> None:
     first = bind_web_server("127.0.0.1", 0)
     host, port = first.server_address
