@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from payslip_extractor.periods import PayslipPeriod
+
 
 @dataclass(frozen=True)
 class PageMatch:
     source_pdf: Path
     page_index: int
     matched_numbers: tuple[str, ...]
+    period: PayslipPeriod | None = None
+    scan_order: int = 0
 
     @property
     def page_number(self) -> int:

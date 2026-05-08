@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from payslip_extractor.folder_scan import normalize_exclude_terms, scan_local_pdf_folder, scan_pdf_sources
+import pytest
+
+from payslip_extractor.folder_scan import (
+    FolderScanCancelled,
+    normalize_exclude_terms,
+    scan_local_pdf_folder,
+    scan_pdf_sources,
+)
 
 
 def test_scan_local_pdf_folder_recurses_sorts_and_skips_by_terms(tmp_path) -> None:
@@ -26,7 +33,7 @@ def test_scan_local_pdf_folder_recurses_sorts_and_skips_by_terms(tmp_path) -> No
         "z.pdf",
     ]
     assert [(item.relative_path, item.reason) for item in result.skipped] == [
-        ("Archive/old.pdf", "Excluded by folder/name filter: archive")
+        ("Archive/", "Excluded folder tree by folder/name filter: archive")
     ]
     assert result.total_pdf_count == 5
 
@@ -151,3 +158,38 @@ def test_scan_pdf_sources_reports_folder_walk_progress(tmp_path) -> None:
     assert any(message.startswith("Reading folder 1:") for message in messages)
     assert any("Finished reading" in message for message in messages)
     assert any("Found 1 PDF file(s) so far" in message for message in messages)
+
+
+def test_scan_pdf_sources_prunes_excluded_folder_trees(tmp_path) -> None:
+    archive = tmp_path / "archive"
+    nested = archive / "nested"
+    current = tmp_path / "current"
+    nested.mkdir(parents=True)
+    current.mkdir()
+    (nested / "old.pdf").write_text("x", encoding="utf-8")
+    (current / "payroll.pdf").write_text("x", encoding="utf-8")
+    messages: list[str] = []
+
+    result = scan_pdf_sources(tmp_path, (), "archive", progress_callback=messages.append)
+
+    assert [item.relative_path for item in result.included] == ["current/payroll.pdf"]
+    assert [(item.relative_path, item.reason) for item in result.skipped] == [
+        ("archive/", "Excluded folder tree by folder/name filter: archive")
+    ]
+    assert not any("archive/nested" in message for message in messages)
+    assert any("Skipping excluded folder tree: archive/" in message for message in messages)
+
+
+def test_scan_pdf_sources_can_be_cancelled(tmp_path) -> None:
+    folder = tmp_path / "current"
+    folder.mkdir()
+    (folder / "payroll.pdf").write_text("x", encoding="utf-8")
+    calls = 0
+
+    def should_cancel() -> bool:
+        nonlocal calls
+        calls += 1
+        return calls > 1
+
+    with pytest.raises(FolderScanCancelled):
+        scan_pdf_sources(tmp_path, (), "", cancel_callback=should_cancel)

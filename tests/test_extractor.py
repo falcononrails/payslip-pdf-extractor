@@ -97,6 +97,46 @@ def test_run_extraction_with_alphanumeric_identifiers(tmp_path) -> None:
     assert sorted(path.name for path in summary.output_files) == ["456A.pdf", "B789.pdf"]
 
 
+def test_run_extraction_sorts_payslip_pages_by_period(tmp_path) -> None:
+    pdf_file = tmp_path / "payroll.pdf"
+    _write_pdf(
+        pdf_file,
+        [
+            "Employee 123 bulletin de paie 09/2026",
+            "Employee 123 bulletin de paie aout 2026",
+            "Employee 123 bulletin de paie 2026-07",
+        ],
+    )
+    numbers_file = _write_numbers_csv(tmp_path, ["123"])
+    output_dir = tmp_path / "out"
+
+    run_extraction([pdf_file], numbers_file, output_dir, "separate")
+
+    assert _pdf_page_texts(output_dir / "123.pdf") == [
+        "Employee 123 bulletin de paie 2026-07",
+        "Employee 123 bulletin de paie aout 2026",
+        "Employee 123 bulletin de paie 09/2026",
+    ]
+
+
+def test_run_extraction_parallel_scans_multiple_pdfs(tmp_path, caplog, monkeypatch) -> None:
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    _write_pdf(first, ["Employee 123 bulletin 01/2026"])
+    _write_pdf(second, ["Employee 456 bulletin 02/2026"])
+    numbers_file = _write_numbers_csv(tmp_path, ["123", "456"])
+    output_dir = tmp_path / "out"
+    monkeypatch.setenv("PAYSLIP_EXTRACTOR_WORKERS", "2")
+
+    with caplog.at_level(logging.INFO, logger="payslip_extractor"):
+        summary = run_extraction([first, second], numbers_file, output_dir, "separate")
+
+    assert summary.matched_pages_count == 2
+    log_messages = [rec.message for rec in caplog.records]
+    assert any("with up to 2 worker(s)" in message for message in log_messages)
+    assert any("Parallel scan progress" in message for message in log_messages)
+
+
 def test_large_pdf_logging_and_extraction(tmp_path, caplog) -> None:
     page_texts = []
     for i in range(500):
@@ -158,3 +198,8 @@ def _write_numbers_csv(tmp_path: Path, numbers: list[str]) -> Path:
 def _read_audit(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
         return list(csv.DictReader(csv_file))
+
+
+def _pdf_page_texts(path: Path) -> list[str]:
+    reader = PdfReader(path)
+    return [(page.extract_text() or "").strip() for page in reader.pages]

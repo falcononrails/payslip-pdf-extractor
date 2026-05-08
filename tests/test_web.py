@@ -161,7 +161,7 @@ def test_web_folder_preview_and_extract_skips_explicitly_filtered_pdfs(tmp_path)
         assert preview["skippedCount"] == 1
         assert preview["includedSamples"] == [{"path": "current/payroll.pdf"}]
         assert preview["skippedSamples"] == [
-            {"path": "archive/old.pdf", "reason": "Excluded by folder/name filter: archive"}
+            {"path": "archive/", "reason": "Excluded folder tree by folder/name filter: archive"}
         ]
 
         body, content_type = _multipart_body(
@@ -191,7 +191,7 @@ def test_web_folder_preview_and_extract_skips_explicitly_filtered_pdfs(tmp_path)
 
     assert {"123.pdf", "audit.csv", "extraction.log"}.issubset(names)
     assert any(
-        row["status"] == "skipped" and "archive/old.pdf" in row["source_pdf"].replace("\\", "/")
+        row["status"] == "skipped" and row["source_pdf"].replace("\\", "/").endswith("/archive")
         for row in audit_rows
     )
 
@@ -329,6 +329,34 @@ def test_web_folder_preview_uses_include_filename_terms(tmp_path) -> None:
     ]
 
 
+def test_web_folder_preview_reuses_scan_cache_for_same_inputs(tmp_path) -> None:
+    current = tmp_path / "current"
+    current.mkdir()
+    _write_pdf(current / "payroll.pdf", ["Employee 123 page"])
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), WebHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+        payload = {"rootPath": str(tmp_path), "excludeTerms": ""}
+
+        first_start = _start_preview_job(base_url, payload)
+        first_job = _wait_for_preview(base_url, str(first_start["previewJobId"]))
+        second_start = _start_preview_job(base_url, payload)
+        second_job = _wait_for_preview(base_url, str(second_start["previewJobId"]))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert first_job["status"] == "done"
+    assert second_job["status"] == "done"
+    assert any("cached PDF preview" in message["text"] for message in second_job["messages"])
+
+
 def test_bind_web_server_falls_back_when_port_is_busy() -> None:
     first = bind_web_server("127.0.0.1", 0)
     host, port = first.server_address
@@ -383,6 +411,12 @@ def _decode_summary(value: str) -> dict[str, object]:
 
 
 def _create_preview(base_url: str, payload: dict[str, object]) -> dict[str, object]:
+    start_payload = _start_preview_job(base_url, payload)
+    preview_job = _wait_for_preview(base_url, str(start_payload["previewJobId"]))
+    return preview_job["preview"]  # type: ignore[return-value]
+
+
+def _start_preview_job(base_url: str, payload: dict[str, object]) -> dict[str, object]:
     preview_request = urllib.request.Request(
         f"{base_url}/api/folder/preview",
         data=json.dumps(payload).encode("utf-8"),
@@ -391,10 +425,7 @@ def _create_preview(base_url: str, payload: dict[str, object]) -> dict[str, obje
     )
     with urllib.request.urlopen(preview_request, timeout=30) as response:
         assert response.status == 202
-        start_payload = json.loads(response.read().decode("utf-8"))
-
-    preview_job = _wait_for_preview(base_url, str(start_payload["previewJobId"]))
-    return preview_job["preview"]  # type: ignore[return-value]
+        return json.loads(response.read().decode("utf-8"))
 
 
 def _start_folder_job(base_url: str, body: bytes, content_type: str) -> dict[str, object]:

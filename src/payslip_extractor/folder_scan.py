@@ -26,6 +26,10 @@ class SkippedFolderPdf:
         return f"{self.reason_label}: {self.term}"
 
 
+class FolderScanCancelled(RuntimeError):
+    """Raised when a folder scan is cancelled by the user."""
+
+
 @dataclass(frozen=True)
 class FolderScanResult:
     root_path: Path | None
@@ -85,6 +89,7 @@ def scan_pdf_sources(
     include_folder_terms: str | list[str] | tuple[str, ...] = (),
     include_filename_terms: str | list[str] | tuple[str, ...] = (),
     progress_callback: Callable[[str], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> FolderScanResult:
     root = Path(root_path).expanduser().resolve(strict=False) if root_path else None
     if root is not None and not root.exists():
@@ -105,6 +110,10 @@ def scan_pdf_sources(
         if progress_callback is not None:
             progress_callback(message)
 
+    def check_cancelled() -> None:
+        if cancel_callback is not None and cancel_callback():
+            raise FolderScanCancelled("PDF preview was cancelled.")
+
     if root is not None:
         report(f"Walking folder tree: {root}")
         if folder_terms:
@@ -117,6 +126,7 @@ def scan_pdf_sources(
             report(f"Could not read folder: {error}")
 
         for current_root, directories, files in os.walk(root, onerror=on_walk_error):
+            check_cancelled()
             directories.sort(key=str.casefold)
             files.sort(key=str.casefold)
             current = Path(current_root)
@@ -124,7 +134,32 @@ def scan_pdf_sources(
             if folder_count <= 5 or folder_count % 25 == 0:
                 report(f"Reading folder {folder_count}: {_relative_folder_label(current, root)}")
 
+            pruned_directories: list[str] = []
+            for directory in directories:
+                directory_path = current / directory
+                relative_directory = directory_path.relative_to(root)
+                matched_term = _first_matching_term(relative_directory.as_posix(), terms)
+                if matched_term is None:
+                    continue
+
+                pruned_directories.append(directory)
+                relative_label = relative_directory.as_posix().rstrip("/") + "/"
+                skipped.append(
+                    SkippedFolderPdf(
+                        path=directory_path.resolve(strict=False),
+                        relative_path=relative_label,
+                        term=matched_term,
+                        reason_label="Excluded folder tree by folder/name filter",
+                    )
+                )
+                report(f"Skipping excluded folder tree: {relative_label}")
+
+            if pruned_directories:
+                pruned = set(pruned_directories)
+                directories[:] = [directory for directory in directories if directory not in pruned]
+
             for filename in files:
+                check_cancelled()
                 path = current / filename
                 if path.suffix.lower() != ".pdf":
                     continue
@@ -148,6 +183,7 @@ def scan_pdf_sources(
     if pdf_paths:
         report(f"Checking {len(pdf_paths)} manually selected PDF file(s).")
     for raw_path in pdf_paths:
+        check_cancelled()
         path = Path(raw_path).expanduser().resolve(strict=False)
         if path.suffix.lower() != ".pdf":
             continue
@@ -165,6 +201,7 @@ def scan_pdf_sources(
     report(f"Applying filters to {len(candidates)} PDF file(s).")
 
     for candidate in sorted(candidates, key=lambda item: item.relative_path.casefold()):
+        check_cancelled()
         matched_term = _first_matching_term(candidate.relative_path, terms)
         if matched_term is not None:
             skipped.append(

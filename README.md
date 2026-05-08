@@ -9,7 +9,7 @@ The Windows build is designed for locked-down computers: the user downloads the 
 - Reads many large searchable-text PDF files.
 - Reads target numbers from pasted text, `.xlsx`, `.xlsm`, `.csv`, or plain text files.
 - Finds exact identifier-token matches only, so `123` does not match `91234`.
-- Extracts only pages where a target number appears.
+- Extracts only pages where a target number appears, sorted by detected payslip year/month when possible.
 - Writes either one PDF per number or one merged PDF.
 - Always writes `audit.csv` with matches, output files, and skipped/error rows.
 
@@ -34,9 +34,11 @@ Double-clicking the executable opens a local browser UI. PDF folders/files are s
 8. Process the preview, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
 
 The browser UI keeps local run history with summary stats in browser localStorage. The history is stored only on that computer.
-The Progress view shows preview progress first. On shared folders or VPN paths, this is where the Python app lists directory entries and reports folder-walk/PDF counts. During extraction, the same view shows PDF/page scanning progress, packaging, and download readiness. Skipped PDFs are written to `audit.csv` with status `skipped`.
+The Progress view shows extraction progress. On shared folders or VPN paths, preview shows an inline status while the Python app lists directory entries and reports folder-walk/PDF counts. Excluded folder trees are pruned before entering them, which makes large archive/backup folders faster to skip. Repeating the same preview within a short window can reuse the in-memory scan cache. During extraction, the Progress view shows PDF/page scanning progress, packaging, and download readiness. Skipped PDFs or skipped folder trees are written to `audit.csv` with status `skipped`.
 Include folder matching ignores case, accents, repeated spaces, punctuation, singular/plural `s`, and date suffixes, so `bulletin de paie` matches names like `BULLETINS DE PAIE`, `BULLETIN   DE PAIE`, and `BULLETINS DE PAIE 08-2026`.
 Include filename matching uses the same tolerant matching against the PDF file name. Filter fields accept comma-separated, semicolon-separated, or newline-separated terms.
+Matched pages are sorted oldest-to-newest by detected payslip period before output PDFs are written. The detector supports numeric periods such as `08/2026`, `08-2026`, `08 2026`, `082026`, and month names such as `août 2026` / `AOUT 2026`. Pages without a detected period stay after dated pages in scan order.
+Extraction scans multiple PDFs in parallel by default, capped conservatively. Set `PAYSLIP_EXTRACTOR_WORKERS=1` to disable parallel PDF scanning, or a small value such as `2` or `4` to tune it for local disks versus VPN/shared folders.
 
 ## CLI Usage
 

@@ -258,6 +258,11 @@
       display: none;
     }
 
+    .inline-loader button {
+      min-height: 28px;
+      padding: 4px 9px;
+    }
+
     .spinner {
       animation: spin 900ms linear infinite;
       border: 2px solid #d8e1e6;
@@ -583,6 +588,7 @@
           <div class="inline-loader" id="previewLoader" hidden aria-live="polite">
             <span class="spinner" aria-hidden="true"></span>
             <span id="previewLoaderText">Preparing preview...</span>
+            <button type="button" id="cancelPreview">Cancel</button>
           </div>
         </div>
 
@@ -691,6 +697,7 @@
     const previewLocalFolder = document.getElementById("previewLocalFolder");
     const previewLoader = document.getElementById("previewLoader");
     const previewLoaderText = document.getElementById("previewLoaderText");
+    const cancelPreview = document.getElementById("cancelPreview");
     const processLocalFolder = document.getElementById("processLocalFolder");
     const localFolderName = document.getElementById("localFolderName");
     const manualPdfName = document.getElementById("manualPdfName");
@@ -721,6 +728,7 @@
     let manualPdfPaths = [];
     let localFolderPreview = null;
     let removedPreviewPaths = new Set();
+    let activePreviewJobId = "";
 
     function showView(viewId) {
       for (const view of appViews) {
@@ -793,11 +801,13 @@
     function showPreviewLoader(text) {
       previewLoader.hidden = false;
       previewLoaderText.textContent = text;
+      cancelPreview.disabled = false;
     }
 
     function hidePreviewLoader() {
       previewLoader.hidden = true;
       previewLoaderText.textContent = "";
+      cancelPreview.disabled = false;
     }
 
     function updatePreviewLoaderFromJob(job) {
@@ -955,8 +965,13 @@
         if (!response.ok) {
           throw new Error(payload.error || `PDF preview failed with HTTP ${response.status}.`);
         }
+        activePreviewJobId = payload.previewJobId || "";
 
         const preview = await waitForPreview(payload.previewJobId);
+        if (!preview) {
+          showMessage("Preview cancelled.");
+          return;
+        }
         localFolderPreview = preview;
         removedPreviewPaths = new Set();
         renderFolderPreview(preview);
@@ -967,8 +982,22 @@
         renderFolderPreview(null);
         showMessage(`PDF preview failed: ${error}`, true);
       } finally {
+        activePreviewJobId = "";
         hidePreviewLoader();
         updatePreviewButton();
+        processLocalFolder.disabled = !localFolderPreview || effectiveIncludedCount(localFolderPreview) === 0;
+      }
+    }
+
+    async function cancelPreviewJob() {
+      if (!activePreviewJobId) return;
+      previewLoader.hidden = false;
+      previewLoaderText.textContent = "Cancelling preview...";
+      cancelPreview.disabled = true;
+      try {
+        await fetch(`/api/previews/${encodeURIComponent(activePreviewJobId)}/cancel`, { method: "POST" });
+      } catch {
+        cancelPreview.disabled = false;
       }
     }
 
@@ -1229,6 +1258,7 @@
         }
 
         updatePreviewLoaderFromJob(job);
+        if (job.status === "cancelled") return null;
         if (job.status === "done" && job.preview) return job.preview;
         if (job.status === "error") {
           throw new Error(job.error || "PDF preview failed.");
@@ -1407,6 +1437,7 @@
     choosePdfFiles.addEventListener("click", choosePdfs);
     clearSources.addEventListener("click", clearPdfSources);
     previewLocalFolder.addEventListener("click", previewFolder);
+    cancelPreview.addEventListener("click", cancelPreviewJob);
     processLocalFolder.addEventListener("click", processFolderPreview);
     function invalidatePreview() {
       localFolderPreview = null;

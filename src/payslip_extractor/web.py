@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from payslip_extractor import __version__
 from payslip_extractor.extractor import ExtractionError, run_extraction
-from payslip_extractor.folder_scan import FolderScanResult, scan_pdf_sources
+from payslip_extractor.folder_scan import FolderScanCancelled, FolderScanResult, scan_pdf_sources
 from payslip_extractor.models import AuditRow
 from payslip_extractor.numbers import NumberFileError, read_numbers, read_numbers_from_text
 
@@ -34,6 +34,7 @@ READ_CHUNK_SIZE = 1024 * 1024
 DEFAULT_WEB_PORT = 8765
 MAX_JOB_MESSAGES = 300
 JOB_RETENTION_SECONDS = 60 * 60
+SCAN_CACHE_RETENTION_SECONDS = 10 * 60
 PREVIEW_SAMPLE_SIZE = 20
 JOBS: dict[str, "ExtractionJob"] = {}
 JOBS_LOCK = threading.Lock()
@@ -41,6 +42,8 @@ FOLDER_PREVIEWS: dict[str, "FolderPreview"] = {}
 FOLDER_PREVIEWS_LOCK = threading.Lock()
 FOLDER_PREVIEW_JOBS: dict[str, "FolderPreviewJob"] = {}
 FOLDER_PREVIEW_JOBS_LOCK = threading.Lock()
+SCAN_CACHE: dict[tuple[object, ...], tuple[float, FolderScanResult]] = {}
+SCAN_CACHE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,7 @@ class FolderPreviewJob:
     preview: FolderPreview | None = None
     error: str | None = None
     completed_monotonic: float | None = None
+    cancel_requested: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def append_message(self, text: str, level: str = "info") -> None:
@@ -98,6 +102,22 @@ class FolderPreviewJob:
         with self._lock:
             self.status = "done"
             self.preview = preview
+            self.completed_monotonic = time.monotonic()
+
+    def request_cancel(self) -> None:
+        with self._lock:
+            self.cancel_requested = True
+            if self.status == "queued":
+                self.status = "cancelled"
+                self.completed_monotonic = time.monotonic()
+
+    def is_cancel_requested(self) -> bool:
+        with self._lock:
+            return self.cancel_requested
+
+    def mark_cancelled(self) -> None:
+        with self._lock:
+            self.status = "cancelled"
             self.completed_monotonic = time.monotonic()
 
     def mark_error(self, error: str) -> None:
@@ -266,6 +286,8 @@ class WebHandler(BaseHTTPRequestHandler):
             handler = self._create_folder_preview
         elif path == "/api/folder/start":
             handler = self._start_folder_extract_job
+        elif re.fullmatch(r"/api/previews/[0-9a-f]{32}/cancel", path):
+            handler = lambda: self._cancel_preview(path)
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
             return
@@ -328,9 +350,25 @@ class WebHandler(BaseHTTPRequestHandler):
                 "previewJobId": job.id,
                 "status": job.status,
                 "statusUrl": f"/api/previews/{job.id}",
+                "cancelUrl": f"/api/previews/{job.id}/cancel",
             },
             status=HTTPStatus.ACCEPTED,
         )
+
+    def _cancel_preview(self, path: str) -> None:
+        match = re.fullmatch(r"/api/previews/([0-9a-f]{32})/cancel", path)
+        if not match:
+            self._send_json({"error": "Preview job not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        job = get_folder_preview_job(match.group(1))
+        if job is None:
+            self._send_json({"error": "Preview job not found."}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        job.request_cancel()
+        job.append_message("Preview cancellation requested.")
+        self._send_json({"previewJobId": job.id, "status": job.status})
 
     def _start_folder_extract_job(self) -> None:
         content_length = int(self.headers.get("Content-Length", "0") or "0")
@@ -589,6 +627,47 @@ def cleanup_expired_state() -> None:
             if job.is_expired(now):
                 del FOLDER_PREVIEW_JOBS[job_id]
 
+    with SCAN_CACHE_LOCK:
+        for cache_key, (created_monotonic, _) in list(SCAN_CACHE.items()):
+            if now - created_monotonic > SCAN_CACHE_RETENTION_SECONDS:
+                del SCAN_CACHE[cache_key]
+
+
+def folder_scan_cache_key(job: FolderPreviewJob) -> tuple[object, ...]:
+    return (
+        job.root_path,
+        tuple(job.pdf_paths),
+        _cache_value(job.exclude_terms),
+        _cache_value(job.include_folder_terms),
+        _cache_value(job.include_filename_terms),
+    )
+
+
+def _cache_value(value: str | list[str]) -> object:
+    if isinstance(value, list):
+        return tuple(str(item) for item in value)
+    return str(value)
+
+
+def get_cached_folder_scan(cache_key: tuple[object, ...]) -> FolderScanResult | None:
+    cleanup_expired_state()
+    now = time.monotonic()
+    with SCAN_CACHE_LOCK:
+        cached = SCAN_CACHE.get(cache_key)
+        if cached is None:
+            return None
+        created_monotonic, scan = cached
+        if now - created_monotonic > SCAN_CACHE_RETENTION_SECONDS:
+            del SCAN_CACHE[cache_key]
+            return None
+        return scan
+
+
+def cache_folder_scan(cache_key: tuple[object, ...], scan: FolderScanResult) -> None:
+    cleanup_expired_state()
+    with SCAN_CACHE_LOCK:
+        SCAN_CACHE[cache_key] = (time.monotonic(), scan)
+
 
 def folder_preview_payload(preview_id: str, scan: FolderScanResult) -> dict[str, object]:
     return {
@@ -612,6 +691,9 @@ def folder_preview_payload(preview_id: str, scan: FolderScanResult) -> dict[str,
 
 
 def run_folder_preview_job(job: FolderPreviewJob) -> None:
+    if job.is_cancel_requested():
+        job.mark_cancelled()
+        return
     job.set_status("running")
     try:
         root_label = job.root_path or "manual PDF selection"
@@ -627,6 +709,15 @@ def run_folder_preview_job(job: FolderPreviewJob) -> None:
         if job.pdf_paths:
             job.append_message(f"Adding {len(job.pdf_paths)} manually selected PDF file(s).")
 
+        cache_key = folder_scan_cache_key(job)
+        cached_scan = get_cached_folder_scan(cache_key)
+        if cached_scan is not None:
+            job.append_message("Using cached PDF preview for the same sources and filters.")
+            preview = FolderPreview(id=job.id, scan=cached_scan, created_monotonic=time.monotonic())
+            register_folder_preview(preview)
+            job.mark_done(preview)
+            return
+
         scan = scan_pdf_sources(
             root_path=job.root_path or None,
             pdf_paths=job.pdf_paths,
@@ -634,13 +725,18 @@ def run_folder_preview_job(job: FolderPreviewJob) -> None:
             include_folder_terms=job.include_folder_terms,
             include_filename_terms=job.include_filename_terms,
             progress_callback=job.append_message,
+            cancel_callback=job.is_cancel_requested,
         )
+        cache_folder_scan(cache_key, scan)
         job.append_message(
             f"Preview ready: {len(scan.included)} selected, {len(scan.skipped)} skipped, {scan.total_pdf_count} total."
         )
         preview = FolderPreview(id=job.id, scan=scan, created_monotonic=time.monotonic())
         register_folder_preview(preview)
         job.mark_done(preview)
+    except FolderScanCancelled as exc:
+        job.append_message(str(exc), "info")
+        job.mark_cancelled()
     except ValueError as exc:
         job.append_message(str(exc), "error")
         job.mark_error(str(exc))
