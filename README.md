@@ -30,7 +30,7 @@ Double-clicking the executable opens a local browser UI. PDF folders/files are s
 4. Enter folder/name exclude terms such as `archive`, `backup`, `old`, or `temp` when needed.
 5. Preview the PDF selection and confirm the selected/skipped counts.
 6. Paste identifiers, choose an identifier file, or do both.
-7. Choose one merged PDF or one PDF per number.
+7. Choose one merged PDF or one PDF per number, and optionally tune PDF scan workers.
 8. Process the preview, follow progress in the browser, and download the ZIP containing extracted PDFs, `audit.csv`, and `extraction.log`.
 
 The browser UI keeps local run history with summary stats in browser localStorage. The history is stored only on that computer.
@@ -38,7 +38,7 @@ The Progress view shows extraction progress. On shared folders or VPN paths, pre
 Include folder matching ignores case, accents, repeated spaces, punctuation, singular/plural `s`, and date suffixes, so `bulletin de paie` matches names like `BULLETINS DE PAIE`, `BULLETIN   DE PAIE`, and `BULLETINS DE PAIE 08-2026`.
 Include filename matching uses the same tolerant matching against the PDF file name. Filter fields accept comma-separated, semicolon-separated, or newline-separated terms.
 Matched pages are sorted oldest-to-newest by detected payslip period before output PDFs are written. The detector supports numeric periods such as `08/2026`, `08-2026`, `08 2026`, `082026`, and month names such as `août 2026` / `AOUT 2026`. Pages without a detected period stay after dated pages in scan order.
-Extraction scans multiple PDFs in parallel by default, capped conservatively. Set `PAYSLIP_EXTRACTOR_WORKERS=1` to disable parallel PDF scanning, or a small value such as `2` or `4` to tune it for local disks versus VPN/shared folders.
+Extraction scans multiple PDFs in parallel by default. The browser UI includes a PDF scan worker selector; use more workers for local disks/fast CPUs and fewer workers for VPN/shared folders if the network becomes the bottleneck. For CLI use `--workers`, or set `PAYSLIP_EXTRACTOR_WORKERS=1` to disable parallel PDF scanning.
 
 ## CLI Usage
 
@@ -84,6 +84,8 @@ Run locally:
 ```bash
 payslip-extractor --pdf /path/to/bulletins.pdf --numbers-file /path/to/matricules.xlsx --output-dir outputs --mode separate
 ```
+
+Use `--workers 1`, `--workers 4`, or `--workers 8` to tune parallel PDF scanning from the CLI.
 
 ## Packaging
 

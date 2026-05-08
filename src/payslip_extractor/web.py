@@ -151,6 +151,7 @@ class ExtractionJob:
     pdf_paths: tuple[Path, ...]
     numbers_file: Path
     mode: str
+    worker_count: int | None = None
     skipped_audit_rows: tuple[AuditRow, ...] = ()
     root_path: Path | None = None
     status: str = "queued"
@@ -386,6 +387,7 @@ class WebHandler(BaseHTTPRequestHandler):
             mode = first_form_value(form.fields, "mode", "separate")
             if mode not in {"separate", "merged"}:
                 raise UserFacingWebError("Invalid output mode.")
+            worker_count = parse_worker_count(first_form_value(form.fields, "scan_workers", "8"))
 
             number_files = form.files.get("numbers_file", [])
             pasted_identifiers = first_form_value(form.fields, "identifiers_text", "").strip()
@@ -431,6 +433,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 pdf_paths=included_paths,
                 numbers_file=numbers_file,
                 mode=mode,
+                worker_count=worker_count,
                 skipped_audit_rows=skipped_rows,
                 root_path=preview.scan.root_path,
             )
@@ -827,6 +830,7 @@ def run_extraction_job(job: ExtractionJob) -> None:
             output_dir=output_dir,
             mode=job.mode,  # type: ignore[arg-type]
             extra_audit_rows=job.skipped_audit_rows,
+            worker_count=job.worker_count,
         )
 
         duration_seconds = round(time.monotonic() - start, 2)
@@ -846,6 +850,7 @@ def run_extraction_job(job: ExtractionJob) -> None:
             "downloadName": zip_path.name,
             "createdAt": created_at.isoformat(timespec="seconds"),
             "skippedPdfCount": len(job.skipped_audit_rows),
+            "workerCount": job.worker_count,
         }
         if job.root_path is not None:
             summary_payload["rootPath"] = str(job.root_path)
@@ -1059,6 +1064,16 @@ def parse_json_string_list(value: str) -> tuple[str, ...]:
     if not isinstance(payload, list):
         raise UserFacingWebError("Invalid preview removal list.")
     return tuple(str(item) for item in payload if isinstance(item, str))
+
+
+def parse_worker_count(value: str) -> int | None:
+    try:
+        worker_count = int(value)
+    except (TypeError, ValueError):
+        raise UserFacingWebError("Invalid PDF scan worker count.")
+    if worker_count < 1 or worker_count > 16:
+        raise UserFacingWebError("PDF scan workers must be between 1 and 16.")
+    return worker_count
 
 
 def prepare_numbers_file(number_files: list[UploadedFile], pasted_identifiers: str, workspace: Path) -> Path:

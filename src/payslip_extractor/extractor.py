@@ -24,7 +24,7 @@ OutputMode = Literal["separate", "merged"]
 
 logger = logging.getLogger("payslip_extractor")
 PROGRESS_LOG_INTERVAL_PAGES = 50
-DEFAULT_PARALLEL_PDF_WORKERS = 4
+DEFAULT_PARALLEL_PDF_WORKERS = 8
 
 AUDIT_FIELDNAMES = [
     "status",
@@ -71,6 +71,7 @@ def run_extraction(
     output_dir: Path | str,
     mode: OutputMode,
     extra_audit_rows: Iterable[AuditRow] = (),
+    worker_count: int | None = None,
 ) -> ExtractionSummary:
     pdfs = [Path(path).expanduser().resolve() for path in pdf_paths]
     if not pdfs:
@@ -87,7 +88,7 @@ def run_extraction(
     numbers = read_numbers(numbers_file_path)
     logger.info("Found %d identifier(s) to search for.", len(numbers))
 
-    matches, audit_rows = scan_pdfs(pdfs, numbers)
+    matches, audit_rows = scan_pdfs(pdfs, numbers, worker_count=worker_count)
 
     matched_numbers_set = {number for match in matches for number in match.matched_numbers}
     logger.info(
@@ -96,6 +97,9 @@ def run_extraction(
         len(numbers),
         len(matches),
     )
+    dated_matches = sum(1 for match in matches if match.period is not None)
+    if matches:
+        logger.info("Detected payslip period for %d/%d matched page(s).", dated_matches, len(matches))
 
     output_files: list[Path] = []
     if matches:
@@ -138,12 +142,13 @@ def _get_total_pages(pdf_path: Path) -> int:
 def scan_pdfs(
     pdf_paths: Iterable[Path],
     numbers: list[str],
+    worker_count: int | None = None,
 ) -> tuple[list[PageMatch], list[AuditRow]]:
     pdf_list = list(pdf_paths)
     total_pdfs = len(pdf_list)
-    worker_count = _parallel_worker_count(total_pdfs)
-    if worker_count > 1:
-        return _scan_pdfs_parallel(pdf_list, numbers, worker_count)
+    resolved_worker_count = _parallel_worker_count(total_pdfs, worker_count)
+    if resolved_worker_count > 1:
+        return _scan_pdfs_parallel(pdf_list, numbers, resolved_worker_count)
 
     all_matches: list[PageMatch] = []
     all_audit_rows: list[AuditRow] = []
@@ -407,18 +412,21 @@ def _scan_one_pdf(
     )
 
 
-def _parallel_worker_count(total_pdfs: int) -> int:
+def _parallel_worker_count(total_pdfs: int, requested_worker_count: int | None = None) -> int:
     if total_pdfs <= 1:
         return 1
 
-    raw_value = os.environ.get("PAYSLIP_EXTRACTOR_WORKERS", "").strip()
-    if raw_value:
-        try:
-            configured = int(raw_value)
-        except ValueError:
-            configured = DEFAULT_PARALLEL_PDF_WORKERS
+    if requested_worker_count is not None:
+        configured = requested_worker_count
     else:
-        configured = DEFAULT_PARALLEL_PDF_WORKERS
+        raw_value = os.environ.get("PAYSLIP_EXTRACTOR_WORKERS", "").strip()
+        if raw_value:
+            try:
+                configured = int(raw_value)
+            except ValueError:
+                configured = DEFAULT_PARALLEL_PDF_WORKERS
+        else:
+            configured = DEFAULT_PARALLEL_PDF_WORKERS
 
     if configured <= 1:
         return 1
@@ -481,7 +489,7 @@ def _write_matches_pdf(
         for match in sort_matches_for_output(matches):
             source_doc = reader_cache.get(match.source_pdf)
             output_doc.insert_pdf(source_doc, from_page=match.page_index, to_page=match.page_index)
-        output_doc.save(str(output_pdf), garbage=3, deflate=True)
+        output_doc.save(str(output_pdf))
     finally:
         output_doc.close()
 

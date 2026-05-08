@@ -119,6 +119,38 @@ def test_run_extraction_sorts_payslip_pages_by_period(tmp_path) -> None:
     ]
 
 
+def test_run_extraction_prefers_payslip_period_over_older_employee_dates(tmp_path) -> None:
+    first = tmp_path / "BULLETINS BMCI 042026.pdf"
+    second = tmp_path / "BULLETINS BMCI 032026.pdf"
+    _write_pdf(first, ["Employee 123 Date d'embauche 01/2017 Bulletin de paie 04/2026"])
+    _write_pdf(second, ["Employee 123 Date de naissance 02/1980 Bulletin de paie 03/2026"])
+    numbers_file = _write_numbers_csv(tmp_path, ["123"])
+    output_dir = tmp_path / "out"
+
+    run_extraction([first, second], numbers_file, output_dir, "separate")
+
+    assert _pdf_page_texts(output_dir / "123.pdf") == [
+        "Employee 123 Date de naissance 02/1980 Bulletin de paie 03/2026",
+        "Employee 123 Date d'embauche 01/2017 Bulletin de paie 04/2026",
+    ]
+
+
+def test_run_extraction_uses_filename_period_when_page_has_only_unrelated_date(tmp_path) -> None:
+    first = tmp_path / "BULLETINS BMCI 042026.pdf"
+    second = tmp_path / "BULLETINS BMCI 032026.pdf"
+    _write_pdf(first, ["Employee 123 Date d'embauche 01/2017"])
+    _write_pdf(second, ["Employee 123 Date d'embauche 01/2018"])
+    numbers_file = _write_numbers_csv(tmp_path, ["123"])
+    output_dir = tmp_path / "out"
+
+    run_extraction([first, second], numbers_file, output_dir, "separate")
+
+    assert _pdf_page_texts(output_dir / "123.pdf") == [
+        "Employee 123 Date d'embauche 01/2018",
+        "Employee 123 Date d'embauche 01/2017",
+    ]
+
+
 def test_run_extraction_parallel_scans_multiple_pdfs(tmp_path, caplog, monkeypatch) -> None:
     first = tmp_path / "first.pdf"
     second = tmp_path / "second.pdf"
@@ -156,7 +188,7 @@ def test_large_pdf_logging_and_extraction(tmp_path, caplog) -> None:
     output_dir = tmp_path / "out"
 
     with caplog.at_level(logging.INFO, logger="payslip_extractor"):
-        summary = run_extraction([pdf_file], numbers_file, output_dir, "separate")
+        summary = run_extraction([pdf_file], numbers_file, output_dir, "separate", worker_count=1)
 
     assert summary.numbers_count == 3
     assert summary.matched_numbers_count == 3

@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
                 numbers_file=numbers_file,
                 output_dir=output_dir,
                 mode=mode,
+                worker_count=args.workers,
             )
         except (ExtractionError, NumberFileError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -134,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["separate", "merged"],
         default="separate",
         help="Output mode: one PDF per identifier or one merged PDF. Default: separate.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="PDF scan worker count. Default: auto, currently up to 8 workers.",
     )
     parser.add_argument(
         "--no-gui",

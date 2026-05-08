@@ -186,6 +186,7 @@
     }
 
     input[type="text"],
+    select,
     textarea {
       border: 1px solid var(--line);
       border-radius: 7px;
@@ -646,6 +647,16 @@
             </label>
           </div>
 
+          <label for="scanWorkers">PDF scan workers</label>
+          <select id="scanWorkers">
+            <option value="8" selected>Fast - 8 workers</option>
+            <option value="4">Balanced - 4 workers</option>
+            <option value="2">Shared folder - 2 workers</option>
+            <option value="1">Single worker</option>
+            <option value="12">Maximum - 12 workers</option>
+          </select>
+          <div class="field-note">Use fewer workers for slow VPN/shared folders if the network becomes the bottleneck.</div>
+
           <div class="row" style="margin-top: 16px;">
             <button class="primary" type="button" id="processLocalFolder" disabled>Process preview and download ZIP</button>
           </div>
@@ -718,6 +729,7 @@
     const lastMatchedIds = document.getElementById("lastMatchedIds");
     const lastPages = document.getElementById("lastPages");
     const lastDuration = document.getElementById("lastDuration");
+    const scanWorkers = document.getElementById("scanWorkers");
     const navTabs = Array.from(document.querySelectorAll(".nav-tab"));
     const appViews = Array.from(document.querySelectorAll(".app-view"));
 
@@ -1021,6 +1033,7 @@
       form.append("preview_id", localFolderPreview.previewId);
       form.append("removed_paths", JSON.stringify([...removedPreviewPaths]));
       form.append("mode", selectedMode());
+      form.append("scan_workers", scanWorkers.value);
       form.append("identifiers_text", pastedIdentifiers);
       if (numbersFile) {
         form.append("numbers_file", numbersFile, numbersFile.name);
